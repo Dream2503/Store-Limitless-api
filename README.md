@@ -1,0 +1,69 @@
+# StoreLimitless
+
+A Python SDK for interacting with the StoreLimitless cloud storage API.
+
+## Installation
+
+```bash
+pip install storelimitless
+```
+
+## Features
+
+- User registration and authentication
+- Directory navigation and creation
+- File uploads with progress tracking
+- File downloads with progress tracking
+- Video streaming through VLC
+- File and directory deletion and restoration
+- Bundled StoreLimitless server executables for Linux and Windows
+
+## Quick Start
+
+```python
+from storelimitless import StoreLimitless
+
+# Start the bundled server and wait until it is ready.
+StoreLimitless.initialize()
+
+# Authenticate
+user = StoreLimitless.login("username", "password")
+
+# List files and directories
+directories, files = user.home.ls
+
+for directory in directories:
+    print(directory.path.name)
+
+for file in files:
+    print(file.name)
+
+# Upload a file
+user.home.upload("example.txt")
+
+# Download a file
+file = next(file for file in user.home.ls.files if file.name == "example.txt")
+file.download()
+```
+
+## Custom Server
+
+You can also provide your own server executable:
+
+```python
+from pathlib import Path
+
+from storelimitless import StoreLimitless
+
+StoreLimitless.initialize(server_path=Path("~/github/drive-bot/releases/linux/StoreLimitlessServer_0.1.0"))
+```
+
+## Requirements
+
+- Python version supported by the installed SDK
+- A compatible StoreLimitless server executable
+- VLC for video streaming
+
+## License
+
+See the project's license information.
