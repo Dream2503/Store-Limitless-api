@@ -3,9 +3,9 @@ from __future__ import annotations
 from atexit import register
 from pathlib import Path
 from signal import signal, SIGINT, SIGTERM, raise_signal, SIG_DFL
-from subprocess import Popen, TimeoutExpired
+from subprocess import PIPE, Popen, TimeoutExpired
 from time import sleep
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from requests import Response, RequestException, get, request, Timeout, ConnectionError
 
@@ -91,18 +91,37 @@ class StoreLimitless:
         return response
 
     @classmethod
-    def initialize(cls, *, server_path: str | Path, server_ip: str = "http://127.0.0.1:8000") -> None:
+    def initialize(cls, *, server_path: str | Path | None = None, server_ip: str = "http://127.0.0.1:8000") -> None:
+        from platform import system
+
         cls.API_URL = server_ip
-        server_path = Path(server_path).expanduser()
+
+        if server_path is None:
+            match system():
+                case "Linux":
+                    server_path = Path(__file__).parent / "bin" / "linux" / "StoreLimitlessServer_0.1.0"
+
+                case "Windows":
+                    server_path = Path(__file__).parent / "bin" / "windows" / "StoreLimitlessServer_0.1.0.exe"
+
+                case os:
+                    raise RuntimeError(f"Bundled StoreLimitless server is not available for {os}")
+
+        server_path = Path(cast(Path, server_path)).expanduser()
 
         if not server_path.is_file():
             raise FileNotFoundError(f"Server executable not found: {server_path}")
+
+        if system() != "Windows":
+            server_path.chmod(server_path.stat().st_mode | 0o111)
 
         if cls._is_server_running():
             return
 
         cls.close()
-        cls._process = Popen([str(server_path)])
+        cls._process = Popen([str(server_path)], stdin=PIPE, text=True)
+        cls._process.stdin.write("server\n")
+        cls._process.stdin.flush()
 
         try:
             for _ in range(300):

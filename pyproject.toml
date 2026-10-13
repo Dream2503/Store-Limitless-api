@@ -4,13 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "storelimitless"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python SDK for StoreLimitless"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests",
     "tqdm",
 ]
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+storelimitless = [
+    "bin/linux/*",
+    "bin/windows/*",
+]
