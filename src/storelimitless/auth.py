@@ -48,7 +48,7 @@ class StoreLimitless:
     @classmethod
     def _is_server_running(cls) -> bool:
         try:
-            response: Response = get(f"{cls.API_URL}/public/ready", timeout=0.1)
+            response: Response = get(f"{cls.API_URL}/public/ready", timeout=10)
             return response.ok
 
         except RequestException:
