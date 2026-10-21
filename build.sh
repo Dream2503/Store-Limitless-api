@@ -2,9 +2,14 @@
 
 set -e
 
-python -m pip install --quiet build twine
+cleanup_artifacts() {
+    rm -rf dist build *.egg-info
+    echo "Removed dist/, build/, and *.egg-info artifacts."
+}
 
-rm -rf dist build *.egg-info
+trap cleanup_artifacts EXIT
+
+python -m pip install --quiet build twine
 
 python -m build
 
