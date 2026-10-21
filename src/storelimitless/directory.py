@@ -14,7 +14,7 @@ from tqdm import tqdm
 from .auth import StoreLimitless
 from .exception import StoreLimitlessConnectionError, StoreLimitlessHTTPError, StoreLimitlessResponseError
 from .file import File
-from .utils import object_id, parse_datetime, directory_from_payload
+from .utils import directory_from_payload
 
 if TYPE_CHECKING:
     from .user import User
