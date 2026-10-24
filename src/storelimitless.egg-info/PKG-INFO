@@ -368,6 +368,11 @@ The URL must be reachable by the server and supported by the server's link-impor
 job-creation request is not by itself proof that the file has finished importing: the SDK waits for the job status and
 then looks up the completed file in the destination listing.
 
+The SDK's high-level `Directory.upload()` currently accepts local paths and HTTP(S) URLs. The server also exposes
+remote-ingestion routes for supported YouTube, magnet-torrent, and Telegram message links, but those workflows are
+not all implemented as dedicated convenience methods on this Python client. Use `User.preview_torrent()` to inspect
+a magnet before importing it, or `StoreLimitless.request()` for server endpoints not yet wrapped by a higher-level method.
+
 ### Upload tuning options
 
 ```python
