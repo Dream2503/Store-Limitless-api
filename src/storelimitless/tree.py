@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .exception import StoreLimitlessResponseError
-from .utils import directory_from_payload
+from .utils import directory_from_payload, parse_datetime
 
 if TYPE_CHECKING:
     from .directory import Directory
@@ -96,7 +96,10 @@ class FileTree:
                 else:
                     parent_id = raw_parent_id if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool) else -1
                     parent = Directory(user, parent_id, Path(raw_path), None, None)
-            files.append(File.from_payload(parent, normalized_record))
+            file = File.from_payload(parent, normalized_record)
+            if is_deleted and file.deleted_at is None:
+                file.deleted_at = parse_datetime("1970-01-01T00:00:00+00:00")
+            files.append(file)
 
         return cls(directories, files, storage_used_bytes)
 
