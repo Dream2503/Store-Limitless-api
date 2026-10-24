@@ -13,10 +13,12 @@ from pathlib import Path
 from platform import system
 from shutil import which
 from subprocess import run, CalledProcessError
+from urllib import request as urllib_request
 from typing import Any, TYPE_CHECKING
 
+from .exception import StoreLimitlessResponseError
+
 if TYPE_CHECKING:
-    from .exception import StoreLimitlessResponseError
     from .directory import Directory
     from .user import User
 
@@ -72,7 +74,7 @@ def directory_from_payload(user: User, data: Any) -> Directory:
         raise StoreLimitlessResponseError("StoreLimitless server returned an invalid directory object") from error
 
 
-def ensure_vlc(urllib_request=None) -> str:
+def ensure_vlc() -> str:
     """Find VLC and attempt a platform-specific installation if it is missing.
 
     The SDK's existing behavior installs VLC automatically on supported Windows and Debian/Ubuntu Linux systems so that :meth:`File.stream` can be
