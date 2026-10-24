@@ -138,8 +138,100 @@ class File:
         route: str = "download" if download else "stream"
         return f"{StoreLimitless.API_URL}/public/{route}/{token}"
 
+    def private_stream_link(self) -> tuple[str, int]:
+        """Create a session-bound stream URL for this file.
+
+        Unlike :meth:`public_link`, the token returned by this route is bound
+        to the current login session. The server stops accepting it after logout.
+        Use this when a media player or application needs a URL but access should
+        not outlive the current login session.
+
+        Returns:
+            A tuple containing the absolute stream URL and lifetime in seconds.
+            The current backend reports 86400 seconds; logout can revoke access
+            earlier.
+
+        Security:
+            Treat the URL as a bearer secret. Session-bound does not mean safe
+            to paste into logs, public issues, or source control.
+        """
+        return self._session_link("private-stream-link", "stream")
+
+    def private_download_link(self) -> tuple[str, int]:
+        """Create a session-bound download URL for this file.
+
+        The token is bound to the current account login session and is revoked
+        when that session is logged out. Use this method for short-lived sharing
+        with a trusted local workflow. For a deliberately shareable public link,
+        use :meth:`public_link(download=True)` instead.
+
+        Returns:
+            The absolute download URL and the server-reported expiration in
+            seconds. The current backend reports 86400 seconds unless logout
+            revokes it sooner.
+        """
+        return self._session_link("download-link", "download")
+
+    def _session_link(self, endpoint: str, route: str) -> tuple[str, int]:
+        """Create a session-bound token and validate the response envelope.
+
+        Kept private so public methods determine both the precise API route and
+        whether the resulting URL streams inline or is downloaded as an
+        attachment. The backend is authoritative for token expiry and revocation.
+        """
+        response = StoreLimitless.request(self.user, "POST", f"/auth/file/{self.id}/{endpoint}")
+        try:
+            data: Any = response.json()
+            token: Any = data.get("public_token") if isinstance(data, dict) else None
+            expires_in: Any = data.get("expires_in") if isinstance(data, dict) else None
+            if not isinstance(token, str) or not token:
+                raise TypeError("public_token must be a non-empty string")
+            if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
+                raise TypeError("expires_in must be a positive integer")
+            return f"{StoreLimitless.API_URL}/public/{route}/{token}", expires_in
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError("StoreLimitless server returned an invalid session-bound link response") from error
+
+    def metadata(self) -> dict[str, Any]:
+        """Fetch the current server-side metadata for this file by ID.
+
+        The result contains the server's file ID, name, media type and size.
+        It is useful when the caller has a File object but needs a fresh
+        metadata snapshot after an upload, rename or other independent operation.
+        """
+        response = StoreLimitless.request(self.user, "GET", f"/auth/file/{self.id}/metadata")
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict):
+                raise TypeError("expected a JSON object")
+            if data.get("id") != self.id or not isinstance(data.get("name"), str):
+                raise TypeError("missing or invalid file identity")
+            if not isinstance(data.get("type"), str) or isinstance(data.get("size"), bool) or not isinstance(data.get("size"), int):
+                raise TypeError("missing or invalid file fields")
+            return data
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError("StoreLimitless server returned invalid file metadata") from error
+
     def download(self, path: str | Path | None = None, *, quiet: bool = False) -> Path:
-        """Download this file to ``path`` (or its original name) with progress."""
+        """Download this file to a local path and display byte progress.
+
+        The source is fetched from the backend's signed download route and
+        streamed in bounded chunks rather than loaded wholly into memory. If
+        path is omitted, the file is written under its current remote name in
+        the process's working directory. Parent directories are created.
+
+        Args:
+            path: Destination file path or None to use the remote file name.
+            quiet: Disable the terminal progress bar when true.
+
+        Returns:
+            A pathlib.Path pointing to the destination file.
+
+        Raises:
+            StoreLimitlessHTTPError: The server rejects access to this file.
+            StoreLimitlessConnectionError: The network transfer fails.
+            StoreLimitlessResponseError: Content-Length metadata is invalid.
+        """
 
         output_path: Path = Path(path) if path is not None else Path(self.name)
         response: Response = StoreLimitless.request(
