@@ -1,5 +1,6 @@
 LICENSE
 README.md
+tests/test_new_models.py
 pyproject.toml
 src/storelimitless/__init__.py
 src/storelimitless/auth.py
