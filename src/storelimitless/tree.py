@@ -1,10 +1,8 @@
 """Typed object model for the StoreLimitless whole-account file-tree endpoint.
 
 The backend /auth/tree endpoint returns all active and trashed objects in one
-response. FileTree preserves that snapshot as SDK Directory and File objects,
+response. FileTree preserves that snapshot as SDK Directory and File objects
 and exposes active/deleted partitions and the server-computed storage total.
-The class does not lazily fetch children because the entire tree is already
-returned by the endpoint.
 """
 
 from __future__ import annotations
@@ -22,17 +20,16 @@ if TYPE_CHECKING:
 
 
 class FileTree:
-    """Represent the complete account-wide snapshot returned by GET /auth/tree.
+    """Represent the complete snapshot returned by GET /auth/tree.
 
     Attributes:
-        directories: All directory objects, including active and trashed items.
-        files: All file objects, including active and trashed items.
-        storage_used_bytes: Backend-calculated total including active and
-            trashed files. This value is not recalculated on the client.
+        directories: All directory objects, active and trashed.
+        files: All file objects, active and trashed.
+        storage_used_bytes: Backend-computed storage total, including active
+            and trashed file bytes. This value is not recalculated locally.
 
-    Each Directory or File carries its deletion state through deleted_at.
-    The collections are snapshots and will not update automatically when
-    objects or server-side records change.
+    Individual Directory and File objects indicate deletion with deleted_at.
+    This is a point-in-time snapshot and will not update itself after mutations.
     """
 
     def __init__(self, directories: list[Directory], files: list[File], storage_used_bytes: int) -> None:
@@ -43,25 +40,26 @@ class FileTree:
 
     @classmethod
     def from_payload(cls, user: User, raw_directories: list[Any], raw_files: list[Any], storage_used_bytes: int) -> FileTree:
-        """Convert tree JSON into SDK Directory and File objects.
+        """Convert the server's JSON tree to SDK objects.
 
-        Each file record includes a containing-directory path, while the API
-        does not promise a separate parent object for every file. This method
-        uses full directory records when available and otherwise constructs a
-        lightweight parent reference carrying the path and authenticated user.
+        File records include a containing-directory path; directory objects
+        may not be provided inline. This method reuses complete directory
+        records when available and otherwise builds lightweight parent
+        references carrying the path and authenticated user context.
 
         Args:
-            user: Account context that owns the complete tree.
-            raw_directories: Directory records returned by the server.
-            raw_files: File records returned by the server.
-            storage_used_bytes: Validated storage total from the tree response.
+            user: Authenticated account owning this tree.
+            raw_directories: Directory records returned by the tree endpoint.
+            raw_files: File records returned by the tree endpoint.
+            storage_used_bytes: Validated storage total returned by the server.
 
         Raises:
-            StoreLimitlessResponseError: An entry cannot be converted into a
-                supported Directory or File object.
+            StoreLimitlessResponseError: Any record cannot be converted to a
+                supported Directory or File model.
         """
         from .directory import Directory
         from .file import File
+
         directories: list[Directory] = []
         directories_by_path: dict[str, Directory] = {}
         directories_by_id: dict[int, Directory] = {}
@@ -70,6 +68,7 @@ class FileTree:
             directories.append(directory)
             directories_by_path[str(directory.path)] = directory
             directories_by_id[directory.id] = directory
+
         files: list[File] = []
         for record in raw_files:
             if not isinstance(record, dict):
@@ -88,11 +87,12 @@ class FileTree:
                     parent_id = raw_parent_id if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool) else -1
                     parent = Directory(user, parent_id, Path(raw_path), None, None)
             files.append(File.from_payload(parent, record))
+
         return cls(directories, files, storage_used_bytes)
 
     @property
     def active_directories(self) -> list[Directory]:
-        """Return directory records whose deleted_at timestamp is empty."""
+        """Return directory records whose deleted_at value is empty."""
         return [directory for directory in self.directories if directory.deleted_at is None]
 
     @property
@@ -102,7 +102,7 @@ class FileTree:
 
     @property
     def active_files(self) -> list[File]:
-        """Return file records whose deleted_at timestamp is empty."""
+        """Return file records whose deleted_at value is empty."""
         return [file for file in self.files if file.deleted_at is None]
 
     @property
@@ -111,5 +111,5 @@ class FileTree:
         return [file for file in self.files if file.deleted_at is not None]
 
     def __repr__(self) -> str:
-        """Return counts and storage usage without printing every file."""
+        """Return counts and storage usage without printing every file record."""
         return f"FileTree(directories={len(self.directories)}, files={len(self.files)}, storage_used_bytes={self.storage_used_bytes})"
