@@ -84,52 +84,17 @@ class User:
 
     @property
     def trash(self) -> DirectoryResult:
-        """Return trashed directories and files as a DirectoryResult snapshot.
+        """Return trashed files and directories as a DirectoryResult snapshot.
 
-        The trash endpoint does not always include every parent path, so the
-        SDK resolves missing file-parent references through active directory
-        listings. Use user.tree for a complete account snapshot in one request.
+        The trash endpoint includes trashed directory records and file records
+        whose original parent may itself be trashed or missing from the active
+        tree. The FileTree endpoint avoids that ambiguity by returning all
+        active and trashed records in one response.
         """
-        from .directory import Directory, DirectoryResult
-        from .file import File
+        from .directory import DirectoryResult
 
-        response = StoreLimitless.request(self, "GET", "/auth/trash")
-        try:
-            raw_directories, raw_files = response.json()
-            if not isinstance(raw_directories, list) or not isinstance(raw_files, list):
-                raise TypeError("Expected two arrays")
-            directories: list[Directory] = [directory_from_payload(self, item) for item in raw_directories]
-            directory_by_id: dict[int, Directory] = {directory.id: directory for directory in directories}
-            directory_by_id.setdefault(self.home.id, self.home)
-            needed_ids: set[int] = {
-                item["directory_id"] for item in raw_files
-                if isinstance(item, dict) and isinstance(item.get("directory_id"), int)
-                and item["directory_id"] not in directory_by_id
-            }
-            if needed_ids:
-                pending: list[Directory] = [self.home]
-                visited: set[int] = set()
-                while pending and not needed_ids.issubset(directory_by_id.keys()):
-                    current: Directory = pending.pop()
-                    if current.id in visited:
-                        continue
-                    visited.add(current.id)
-                    children: list[Directory] = current.ls.directories
-                    for child in children:
-                        directory_by_id[child.id] = child
-                    pending.extend(children)
-            files: list[File] = []
-            for item in raw_files:
-                if not isinstance(item, dict):
-                    raise TypeError("Expected a file object")
-                parent_id: Any = item.get("directory_id")
-                parent: Directory = directory_by_id.get(parent_id, self.home) if isinstance(parent_id, int) else self.home
-                files.append(File.from_payload(parent, item))
-            return DirectoryResult(directories, files)
-        except (ValueError, KeyError, TypeError) as error:
-            if isinstance(error, StoreLimitlessResponseError):
-                raise
-            raise StoreLimitlessResponseError("StoreLimitless server returned an invalid trash response") from error
+        tree = self.tree
+        return DirectoryResult(tree.trashed_directories, tree.trashed_files)
 
     def search(self, query: str, *, trash: bool = False) -> DirectoryResult:
         """Search file and directory metadata across the entire account.
