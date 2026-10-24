@@ -779,6 +779,23 @@ Python methods above; request and response schemas remain the responsibility of 
 | `POST /auth/trash/directory/{did}/restore` | Restore a trashed directory.                                                   |
 | `DELETE /auth/trash/file/{fid}`            | Permanently delete a trashed file.                                             |
 | `DELETE /auth/trash/directory/{did}`       | Permanently delete a trashed directory.                                        |
+| `GET /auth/tree` | Return the complete active and trashed file tree with the storage total. |
+| `GET /auth/file/{fid}/metadata` | Fetch fresh metadata for a specific file. |
+| `POST /auth/file/{fid}/private-stream-link` | Create a stream link bound to the current login session. |
+| `POST /auth/file/{fid}/download-link` | Create a download link bound to the current login session. |
+| `POST /auth/logout` | Revoke links bound to the current login session. |
+| `POST /auth/files/zip-link` | Create a short-lived link for a streamed ZIP64 archive. |
+| `GET /auth/torrent-preview` | Resolve magnet metadata without downloading torrent payload bytes. |
+| `POST /auth/upload-batches` | Create a task-tray batch record. |
+| `GET /auth/upload-batches` | List task-tray batch snapshots. |
+| `PATCH /auth/upload-batches/{batch_id}` | Publish task and per-item progress. |
+| `POST /auth/upload-batches/{batch_id}/cancel` | Cancel the current batch and queued items. |
+| `DELETE /auth/upload-batches/{batch_id}` | Dismiss a terminal task from the tray. |
+| `GET /auth/upload-jobs` | List upload/import jobs and current snapshots. |
+| `GET /auth/upload-jobs/{job_id}/status` | Fetch download/upload progress, speeds, ETA and torrent status. |
+| `POST /auth/upload-jobs/{job_id}/cancel` | Cancel a child upload/import job. |
+| `DELETE /auth/upload-jobs/{job_id}` | Dismiss a terminal child job. |
+| `POST /auth/upload-jobs/{job_id}/fail` | Report a client-side failure for a local-file upload. |
 
 Authenticated routes require a valid bearer token, supplied by the SDK when you pass a `User` to
 `StoreLimitless.request()`. The upload status and chunk routes are used by the SDK's upload workflow; use the matching
