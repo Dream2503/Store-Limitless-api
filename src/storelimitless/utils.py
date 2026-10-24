@@ -13,6 +13,7 @@ from pathlib import Path
 from platform import system
 from shutil import which
 from subprocess import run, CalledProcessError
+from urllib import request as urllib_request
 from typing import Any, TYPE_CHECKING
 
 from .exception import StoreLimitlessResponseError
