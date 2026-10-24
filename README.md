@@ -817,6 +817,18 @@ Authenticated routes require a valid bearer token, supplied by the SDK when you 
 `StoreLimitless.request()`. The upload status and chunk routes are used by the SDK's upload workflow; use the matching
 server's route definitions for the exact schemas and limits.
 
+
+## Run the regression tests
+
+The focused regression tests use Python's standard `unittest` framework and do not require credentials or a running server:
+
+```bash
+python -m pip install -e .
+python -m unittest discover -s tests -v
+```
+
+The current repository does not have an Actions workflow configured to run these tests automatically, so run this command locally before releasing a package.
+
 ## Security and operational notes
 
 - Use HTTPS whenever traffic crosses a network you do not fully trust.
