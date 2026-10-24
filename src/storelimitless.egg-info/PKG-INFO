@@ -434,6 +434,146 @@ is not appropriate for your environment.
 holding a valid link may be able to access the file permitted by that link. Do not commit them to source control, expose
 them in logs, or share them publicly unless that is intended.
 
+## Complete file tree
+
+The main server exposes `GET /auth/tree`, which returns active and trashed files and folders plus the server-computed storage total in a single request. Use `user.tree` when a recursive walk through every directory would create unnecessary requests.
+
+```python
+from storelimitless import FileTree, StoreLimitless, User
+
+StoreLimitless.initialize(server_ip="http://127.0.0.1:8000")
+user: User = StoreLimitless.login("your_username", "your_password")
+
+tree: FileTree = user.tree
+print("Bytes stored:", tree.storage_used_bytes)
+
+for folder in tree.active_directories:
+    print("Folder:", folder.path)
+
+for file in tree.active_files:
+    print("File:", file.directory.path / file.name, file.size)
+
+for file in tree.trashed_files:
+    print("In trash:", file.name, file.deleted_at)
+```
+
+`FileTree` is a point-in-time snapshot. Request `user.tree` again after file operations when you need fresh data. The tree endpoint deliberately omits remote storage-provider links from file records.
+
+## Streamed ZIP downloads
+
+Download several files or one or more folders as a streamed ZIP64 archive. Folder contents are included recursively and keep their relative paths. The backend streams archive data from remote storage instead of building the entire archive as a server-side temporary file.
+
+```python
+from pathlib import Path
+from storelimitless import Directory, File, User
+
+home: Directory = user.home
+listing = home.ls
+
+# The server requires either at least one folder or at least two files.
+selected: list[File | Directory] = list(listing.files[:2])
+if len(selected) >= 2:
+    archive: Path = user.download_zip(
+        selected,
+        path="./downloads/selected-files.zip",
+        filename="selected-files.zip",
+        quiet=False,
+    )
+    print("Archive saved to:", archive)
+
+# A single folder is also a valid archive selection.
+# projects: Directory = home.cd("projects")
+# archive = user.download_zip([projects], "./downloads/projects.zip")
+```
+
+`user.create_zip_link(items)` can be used when your application needs the URL instead of writing the archive locally. It returns a pair of `(url, expires_in_seconds)`; the current server gives ZIP links a 15-minute lifetime. Valid selections are limited to 500 objects. When no folder is selected, select at least two files. ZIP links are bound to the current login session and are revoked when that session logs out, so treat the URL as a secret and do not persist it as a permanent share.
+
+## Session-bound file links and logout
+
+The existing `file.public_link()` method creates a public bearer link. For workflows that should stop working when the user logs out, use the session-bound methods instead:
+
+```python
+file = user.home.ls.files[0]
+
+stream_url, stream_expires_in = file.private_stream_link()
+download_url, download_expires_in = file.private_download_link()
+
+print("Session stream expires in:", stream_expires_in)
+print("Session download expires in:", download_expires_in)
+
+# Logout revokes links bound to this login. Discard the old User object.
+user.logout()
+```
+
+The backend advertises a 24-hour lifetime for these private links, but logout revokes them earlier. Public links made by `file.public_link()` are not revoked by this logout operation. After `user.logout()`, the local access token is cleared; sign in again through `StoreLimitless.login()` to obtain a usable `User` object.
+
+## File metadata
+
+Fetch the latest server-side metadata for a file using `file.metadata()`. Unlike the attributes already on a `File` instance, the returned dictionary represents a fresh response:
+
+```python
+metadata = file.metadata()
+print(metadata["name"], metadata["type"], metadata["size"])
+```
+
+## Torrent preview and upload-job progress
+
+The main server can resolve torrent metadata before downloading its payload, and its Task tray tracks download and upload progress separately. The SDK now wraps these responses as objects:
+
+```python
+from storelimitless import TorrentPreview, UploadJob, User
+
+preview: TorrentPreview = user.preview_torrent(
+    "magnet:?xt=urn:btih:REPLACE_WITH_A_VALID_INFO_HASH"
+)
+print(preview.name, preview.total_size)
+
+for torrent_file in preview:
+    # Preserve the original index; it may not match the visible row number.
+    print(torrent_file["index"], torrent_file["path"], torrent_file["size"])
+
+# Fetch known child jobs from the shared Task tray.
+for job in user.upload_jobs:
+    print(job.name, job.status, job.message)
+    print("Downloaded:", job.download_transfer, "/", job.download_total)
+    print("Uploaded:", job.transfer, "/", job.total)
+    print("Download/upload rates:", job.download_speed, job.upload_speed)
+    # job.refresh() updates the object's snapshot.
+```
+
+Torrent preview returns file metadata only. It does not start a download. The original zero-based torrent indices must be preserved when selecting files because padding files may be omitted from the visible preview.
+
+## Task-tray jobs and batches
+
+The task tray is backed by server-side state, so it can include work started on another signed-in device. `user.upload_tasks` lists task batches; `user.upload_jobs` lists child upload/import jobs. Instances are snapshots, and do not poll in the background.
+
+```python
+from storelimitless import UploadTask, UploadJob, User
+
+for task in user.upload_tasks:
+    print(task.batch_id, task.name, task.status, task.completed_items, "/", task.total_items)
+    task.refresh()  # fetch the latest stored task state
+
+for job in user.upload_jobs:
+    print(job.job_id, job.name, job.status)
+    if job.status == "uploading":
+        job.cancel()  # cancel an active server-side job
+
+# This registers tray metadata; it does not start the actual file transfer.
+task: UploadTask = user.create_upload_task(
+    "Reports",
+    [{"name": "report.pdf", "size": 12345}],
+    directory=user.home,
+    data_center="Discord",
+    kind="file",
+)
+print("Created task:", task.batch_id)
+```
+
+`UploadTask.update(...)` publishes task or per-item status. For example, callers may set `status`, `message`, `current_index`, `completed_items`, or per-item values such as `item_index`, `item_status`, `item_transfer`, `item_total`, and `item_progress`. `task.cancel()` stops the active item and cancels queued items. `task.dismiss()` removes a terminal task from the tray; it does not delete successfully uploaded files. Similarly, `job.dismiss()` removes a terminal child job, while `job.report_failure(message)` is specifically intended to report client-side chunk-transfer failure for a local-file job. The server rejects dismissal of active jobs/tasks.
+
+A task created through `create_upload_task()` is only a task record. It does not create child jobs or transfer bytes on its own. Use the existing `Directory.upload()` or the appropriate supported import workflow to actually run transfer work.
+
 ## Searching files and directories
 
 Search is account-wide, rather than limited to a directory subtree:
