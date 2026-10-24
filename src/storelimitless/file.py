@@ -139,6 +139,75 @@ class File:
         return f"{StoreLimitless.API_URL}/public/{route}/{token}"
 
     def private_stream_link(self) -> tuple[str, int]:
+        """Create a stream URL bound to the current login session.
+
+        Returns:
+            A pair of the absolute URL and server-reported expiry in seconds.
+            The current backend sets the link lifetime to 24 hours, but it is
+            invalidated sooner if the associated login session is logged out.
+
+        Security:
+            Treat the URL as a bearer secret. Do not publish it in logs, source
+            control, public issue reports, or other places that strangers can read.
+        """
+        return self._session_link("private-stream-link", "stream")
+
+    def private_download_link(self) -> tuple[str, int]:
+        """Create an attachment URL bound to the current login session.
+
+        Use this for trusted, temporary workflows. For a deliberately
+        shareable link that is not revoked by logout, use public_link(download=True).
+
+        Returns:
+            The absolute URL and the expiry in seconds reported by the server.
+        """
+        return self._session_link("download-link", "download")
+
+    def _session_link(self, endpoint: str, route: str) -> tuple[str, int]:
+        """Create and validate a session-bound file link.
+
+        This private helper keeps token validation and URL construction in one
+        place while allowing the public methods to select the exact API endpoint
+        and whether the final URL streams inline or downloads as an attachment.
+        """
+        response = StoreLimitless.request(self.user, "POST", f"/auth/file/{self.id}/{endpoint}")
+        try:
+            data: Any = response.json()
+            token: Any = data.get("public_token") if isinstance(data, dict) else None
+            expires_in: Any = data.get("expires_in") if isinstance(data, dict) else None
+            if not isinstance(token, str) or not token:
+                raise TypeError("public_token must be a non-empty string")
+            if isinstance(expires_in, bool) or not isinstance(expires_in, int) or expires_in <= 0:
+                raise TypeError("expires_in must be a positive integer")
+            return f"{StoreLimitless.API_URL}/public/{route}/{token}", expires_in
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid session-bound link response"
+            ) from error
+
+    def metadata(self) -> dict[str, Any]:
+        """Fetch the current server-side metadata for this file.
+
+        Returns:
+            A dictionary with the file ID, name, media type and size from the
+            current API response. This does not mutate the local File snapshot.
+        """
+        response = StoreLimitless.request(self.user, "GET", f"/auth/file/{self.id}/metadata")
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict):
+                raise TypeError("expected a JSON object")
+            if data.get("id") != self.id or not isinstance(data.get("name"), str):
+                raise TypeError("missing or invalid file identity")
+            if not isinstance(data.get("type"), str) or isinstance(data.get("size"), bool) or not isinstance(data.get("size"), int):
+                raise TypeError("missing or invalid file fields")
+            return data
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned invalid file metadata"
+            ) from error
+
+    def private_stream_link(self) -> tuple[str, int]:
         """Create a session-bound stream URL for this file.
 
         Unlike :meth:`public_link`, the token returned by this route is bound
