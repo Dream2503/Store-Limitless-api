@@ -20,6 +20,7 @@ from .auth import StoreLimitless
 from .exception import StoreLimitlessResponseError
 from .utils import directory_from_payload
 from .tasks import TorrentPreview, UploadJob, UploadTask
+from .tree import FileTree
 
 if TYPE_CHECKING:
     from .directory import Directory, DirectoryResult
@@ -207,8 +208,6 @@ class User:
         is a point-in-time snapshot; read user.tree again after mutations when
         current information is required.
         """
-        from .tree import FileTree
-
         response = StoreLimitless.request(self, "GET", "/auth/tree")
         try:
             payload: Any = response.json()
