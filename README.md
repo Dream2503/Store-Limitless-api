@@ -832,7 +832,7 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-The current repository does not have an Actions workflow configured to run these tests automatically, so run this command locally before releasing a package.
+The repository does not currently configure CI to run these tests automatically. Run this command locally before releasing a package.
 
 ## Security and operational notes
 
