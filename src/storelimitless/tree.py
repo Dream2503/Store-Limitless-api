@@ -67,7 +67,8 @@ class FileTree:
             if not isinstance(record, dict):
                 raise StoreLimitlessResponseError("StoreLimitless server returned an invalid directory-tree entry")
             normalized_record = dict(record)
-            if "deleted_at" not in normalized_record and normalized_record.get("is_deleted") is True:
+            is_deleted = normalized_record.get("is_deleted") is True
+            if is_deleted and not normalized_record.get("deleted_at"):
                 normalized_record["deleted_at"] = "1970-01-01T00:00:00+00:00"
             directory = directory_from_payload(user, normalized_record)
             directories.append(directory)
@@ -79,7 +80,8 @@ class FileTree:
             if not isinstance(record, dict):
                 raise StoreLimitlessResponseError("StoreLimitless server returned an invalid file-tree entry")
             normalized_record = dict(record)
-            if "deleted_at" not in normalized_record and normalized_record.get("is_deleted") is True:
+            is_deleted = normalized_record.get("is_deleted") is True
+            if is_deleted and not normalized_record.get("deleted_at"):
                 normalized_record["deleted_at"] = "1970-01-01T00:00:00+00:00"
             raw_path: Any = normalized_record.get("directory")
             raw_parent_id: Any = normalized_record.get("directory_id")
