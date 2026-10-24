@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from storelimitless import FileTree, TorrentPreview, UploadJob, UploadTask
+from storelimitless import File, FileTree, TorrentPreview, UploadJob, UploadTask
 
 
 class TaskModelTests(unittest.TestCase):
