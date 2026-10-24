@@ -203,6 +203,15 @@ This is a class-level API namespace and is not instantiated.
 | `user.trash`                                         | Return a `DirectoryResult` containing trashed directories and files.                                                 |
 | `user.search(query, trash=False)`                    | Search the account for files and directories by name. Set `trash=True` to search trashed items.                      |
 | `user.move(items, destination)`                      | Batch-move `File` and/or `Directory` objects. Returns the server's per-item result dictionary.                       |
+| `user.tree`                                            | One-request account-wide `FileTree` snapshot, including active and trashed objects.                                   |
+| `user.storage_used_bytes`                              | Fresh storage total in bytes, as reported by the server.                                                               |
+| `user.logout()`                                        | End the current session and revoke session-bound file/ZIP links.                                                       |
+| `user.preview_torrent(link)`                           | Resolve torrent name and file indices/sizes without downloading payload bytes.                                         |
+| `user.upload_tasks`, `user.upload_jobs`                | List cross-device Task-tray batch and child-job snapshots.                                                             |
+| `user.create_upload_task(...)`                         | Register task-tray metadata; does not itself start a file transfer.                                                   |
+| `user.get_upload_job(job_id)`                           | Retrieve current status for a known upload/import job.                                                                |
+| `user.create_zip_link(items)`                           | Create a session-bound ZIP64 download URL and return its expiry.                                                      |
+| `user.download_zip(items, ...)`                         | Stream selected files/folders into a local ZIP64 archive.                                                             |
 
 ### `Directory`
 
@@ -257,6 +266,9 @@ A `File` object represents a stored remote file and exposes metadata including `
 |-----------------------------------------|-----------------------------------------------------------------------------------------------------|
 | `file.download(path=None, quiet=False)` | Download to a local path, showing progress by default; returns the destination as a `pathlib.Path`. |
 | `file.public_link(download=False)`      | Create a signed public stream URL. Use `download=True` for a download URL.                          |
+| `file.private_stream_link()`             | Return a session-bound streaming URL and server-reported expiry.                                   |
+| `file.private_download_link()`            | Return a session-bound attachment URL and server-reported expiry.                                  |
+| `file.metadata()`                         | Fetch the current server metadata for this file.                                                   |
 | `file.stream(application="vlc")`        | Open the public stream URL in the requested player executable and wait for the player to exit.      |
 | `file.rename(name)`                     | Rename the remote file and update this object's name.                                               |
 | `file.move(destination)`                | Move the file into an existing directory.                                                           |
