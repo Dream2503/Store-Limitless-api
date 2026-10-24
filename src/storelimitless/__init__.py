@@ -582,6 +582,8 @@ The following names are re-exported from this package for convenience:
 * ``StoreLimitlessConnectionError``
 * ``StoreLimitlessHTTPError``
 * ``StoreLimitlessResponseError``
+* ``FileTree``
+* ``UploadTask``, ``UploadJob`` and ``TorrentPreview``
 
 Import public objects directly from ``storelimitless`` as shown throughout this guide. Internal implementation modules are not required for normal
 use.
