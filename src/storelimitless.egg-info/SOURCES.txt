@@ -7,6 +7,8 @@ src/storelimitless/directory.py
 src/storelimitless/exception.py
 src/storelimitless/file.py
 src/storelimitless/user.py
+src/storelimitless/tasks.py
+src/storelimitless/tree.py
 src/storelimitless/utils.py
 src/storelimitless.egg-info/PKG-INFO
 src/storelimitless.egg-info/SOURCES.txt
