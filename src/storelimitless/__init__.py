@@ -11,6 +11,12 @@ The main public objects are:
 * :class:`Directory`: a directory in the user's *remote StoreLimitless filesystem*, not a directory on the computer running Python.
 * :class:`File`: metadata and operations for a remote stored file.
 * :class:`DirectoryResult`: a pair of directory and file collections.
+* :class:`FileTree`: an account-wide snapshot that includes active and trashed objects.
+* :class:`UploadTask` and :class:`UploadJob`: wrappers for cross-device task-tray state and lifecycle.
+* :class:`TorrentPreview`: file metadata resolved from a magnet link before downloading payload bytes.
+
+The SDK also supports streamed ZIP64 downloads, session-bound file links that can be revoked at logout,
+file metadata refresh, torrent previews, and typed access to the server's expanded upload progress model.
 
 The exceptions exported here provide a stable way to handle connection, HTTP, and invalid-response failures without importing internal modules.
 
@@ -591,6 +597,8 @@ from .exception import (
 )
 from .file import File
 from .user import User
+from .tree import FileTree
+from .tasks import TorrentPreview, UploadJob, UploadTask
 
 __all__ = [
     "StoreLimitless",
