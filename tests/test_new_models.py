@@ -10,9 +10,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
-
-from storelimitless import File, FileTree, StoreLimitlessResponseError, TorrentPreview, UploadJob, UploadTask
+from storelimitless import FileTree, TorrentPreview, UploadJob, UploadTask
 
 
 class TaskModelTests(unittest.TestCase):
@@ -129,7 +127,8 @@ class FileTreeTests(unittest.TestCase):
                     "id": 2,
                     "path": "/home/trash-folder",
                     "modified_at": datetime.now(timezone.utc).isoformat(),
-                    "deleted_at": datetime.now(timezone.utc).isoformat(),
+                    "deleted_at": None,
+                    "is_deleted": True,
                 },
             ],
             [
