@@ -64,7 +64,12 @@ class FileTree:
         directories_by_path: dict[str, Directory] = {}
         directories_by_id: dict[int, Directory] = {}
         for record in raw_directories:
-            directory = directory_from_payload(user, record)
+            if not isinstance(record, dict):
+                raise StoreLimitlessResponseError("StoreLimitless server returned an invalid directory-tree entry")
+            normalized_record = dict(record)
+            if "deleted_at" not in normalized_record and normalized_record.get("is_deleted") is True:
+                normalized_record["deleted_at"] = "1970-01-01T00:00:00+00:00"
+            directory = directory_from_payload(user, normalized_record)
             directories.append(directory)
             directories_by_path[str(directory.path)] = directory
             directories_by_id[directory.id] = directory
@@ -73,8 +78,11 @@ class FileTree:
         for record in raw_files:
             if not isinstance(record, dict):
                 raise StoreLimitlessResponseError("StoreLimitless server returned an invalid file-tree entry")
-            raw_path: Any = record.get("directory")
-            raw_parent_id: Any = record.get("directory_id")
+            normalized_record = dict(record)
+            if "deleted_at" not in normalized_record and normalized_record.get("is_deleted") is True:
+                normalized_record["deleted_at"] = "1970-01-01T00:00:00+00:00"
+            raw_path: Any = normalized_record.get("directory")
+            raw_parent_id: Any = normalized_record.get("directory_id")
             parent: Directory | None = None
             if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool):
                 parent = directories_by_id.get(raw_parent_id)
@@ -86,7 +94,7 @@ class FileTree:
                 else:
                     parent_id = raw_parent_id if isinstance(raw_parent_id, int) and not isinstance(raw_parent_id, bool) else -1
                     parent = Directory(user, parent_id, Path(raw_path), None, None)
-            files.append(File.from_payload(parent, record))
+            files.append(File.from_payload(parent, normalized_record))
 
         return cls(directories, files, storage_used_bytes)
 
