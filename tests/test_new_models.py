@@ -8,11 +8,13 @@ Run with: python -m unittest discover -s tests -v
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timezone
-from unittest.mock import PropertyMock, patch
-from storelimitless import Directory, File, FileTree, StoreLimitless, TorrentPreview, UploadJob, UploadTask, User
+from ftplib import error_perm
+from unittest.mock import MagicMock, PropertyMock, patch
+from storelimitless import Directory, File, FileTree, FTPClient, StoreLimitless, StoreLimitlessFTPError, TorrentPreview, UploadJob, UploadTask, User
 
 
 class TaskModelTests(unittest.TestCase):
@@ -262,6 +264,20 @@ class AuthenticationTransportTests(unittest.TestCase):
         self.assertEqual(kwargs["json"], {"username": "demo", "password": "secret"})
         self.assertNotIn("params", kwargs)
 
+    def test_register_sends_profile_fields_as_json(self) -> None:
+        with patch.object(StoreLimitless, "_is_server_running", return_value=True), \
+             patch.object(StoreLimitless, "request") as request:
+            StoreLimitless.register("Ada", "Lovelace", "ada", "secret")
+        args, kwargs = request.call_args
+        self.assertEqual(args[1:3], ("POST", "/auth/register"))
+        self.assertEqual(kwargs["json"], {
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "username": "ada",
+            "password": "secret",
+        })
+        self.assertNotIn("params", kwargs)
+
     def test_initialize_uses_ready_remote_without_starting_binary(self) -> None:
         with patch.object(StoreLimitless, "_is_server_running", return_value=True), \
              patch("storelimitless.auth.Popen") as process:
@@ -302,6 +318,48 @@ class DirectoryImportTests(unittest.TestCase):
         self.user = SimpleNamespace(username="demo", token="token", home=None)
         self.directory = Directory(self.user, 1, Path("/home"), None, None)  # type: ignore[arg-type]
         self.user.home = self.directory
+
+    def test_local_upload_sends_chunks_and_polls_public_status(self) -> None:
+        stored_file = SimpleNamespace(id=42, name="chunked.bin")
+        requests = []
+
+        def fake_request(user, method, path, **kwargs):
+            requests.append((method, path, kwargs))
+            if path == "/auth/upload":
+                return SimpleNamespace(json=lambda: {"job_id": "job-chunks"})
+            if path == "/public/upload/job-chunks/status":
+                return SimpleNamespace(json=lambda: {
+                    "status": "completed",
+                    "message": "Upload complete of id=42",
+                    "file_id": 42,
+                    "transfer": 7,
+                    "total": 7,
+                })
+            return SimpleNamespace(ok=True)
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "chunked.bin"
+            source.write_bytes(b"abcdefg")
+            with patch.object(Directory, "ls", new_callable=PropertyMock, return_value=SimpleNamespace(files=[stored_file])), \
+                 patch("storelimitless.directory.StoreLimitless.request", side_effect=fake_request), \
+                 patch("storelimitless.directory.tqdm"):
+                result = self.directory.upload(
+                    source,
+                    data_center="Telegram",
+                    chunk_size=3,
+                    poll_interval=0,
+                    quiet=True,
+                )
+
+        self.assertIs(result, stored_file)
+        self.assertEqual(requests[0][0:2], ("POST", "/auth/upload"))
+        self.assertEqual(requests[0][2]["headers"]["X-Data-Center"], "Telegram")
+        chunk_calls = [entry for entry in requests if entry[1] == "/public/upload/job-chunks/chunk"]
+        self.assertEqual(
+            [(call[2]["params"]["offset"], call[2]["data"]) for call in chunk_calls],
+            [(0, b"abc"), (3, b"def"), (6, b"g")],
+        )
+        self.assertEqual(requests[-1][0:2], ("GET", "/public/upload/job-chunks/status"))
 
     def test_import_link_submits_magnet_indices_and_batch(self) -> None:
         response = SimpleNamespace(json=lambda: {"job_id": "job-42"})
@@ -423,6 +481,150 @@ class FileSecurityAndSharingTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), b"hello")
         self.assertEqual(request.call_args.args[2], "/public/download/private")
         progress.assert_called_once()
+
+
+class FTPClientTests(unittest.TestCase):
+    """Exercise the optional FTP client without opening a network connection."""
+
+    def setUp(self) -> None:
+        self.client = object.__new__(FTPClient)
+        self.client.host = "ftp.example.test"
+        self.client.port = 2121
+        self.client.username = "demo"
+        self.client.passive = True
+        self.client._ftp = MagicMock()
+        self.client._closed = False
+
+    def test_connect_authenticates_and_sets_passive_mode(self) -> None:
+        with patch("storelimitless.ftp.FTP") as ftp_type:
+            ftp = ftp_type.return_value
+            client = FTPClient("ftp.example.test", "demo", "secret", port=2121)
+        ftp.connect.assert_called_once_with("ftp.example.test", 2121, timeout=30.0)
+        ftp.login.assert_called_once_with("demo", "secret")
+        ftp.set_pasv.assert_called_once_with(True)
+        self.assertEqual(client.host, "ftp.example.test")
+        client.close()
+
+    def test_invalid_remote_path_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.client.cwd("/home\nQUIT")
+
+    def test_listdir_and_navigation_use_ftp_commands(self) -> None:
+        self.client._ftp.pwd.return_value = "/"
+        self.client._ftp.nlst.return_value = ["notes.txt", "photos"]
+        self.assertEqual(self.client.listdir(), ["notes.txt", "photos"])
+        self.assertEqual(self.client.cwd("/photos"), "/")
+        self.client._ftp.cwd.assert_called_once_with("/photos")
+
+    def test_listdir_details_uses_mlsd_and_normalizes_facts(self) -> None:
+        self.client._ftp.mlsd.return_value = iter([
+            ("notes.txt", {"type": "file", "size": "5"}),
+            ("photos", {"type": "dir"}),
+        ])
+        rows = self.client.listdir_details("/")
+        self.assertEqual(rows[0], ("notes.txt", {"type": "file", "size": "5"}))
+        self.client._ftp.mlsd.assert_called_once_with("/")
+
+    def test_append_bytes_uses_ftp_appe(self) -> None:
+        captured = {}
+
+        def transfer(command, stream, blocksize=8192):
+            captured["command"] = command
+            captured["content"] = stream.read()
+            return "226 Transfer complete."
+
+        self.client._ftp.storbinary.side_effect = transfer
+        self.client.append_bytes(b"tail", "/new-file.txt")
+        self.assertEqual(captured["command"], "APPE /new-file.txt")
+        self.assertEqual(captured["content"], b"tail")
+
+    def test_delete_and_rmdir_call_soft_delete_ftp_commands(self) -> None:
+        self.client._ftp.delete.return_value = "250 File moved to trash."
+        self.client._ftp.rmd.return_value = "250 Directory moved to trash."
+        self.client.delete("/old.txt")
+        self.client.rmdir("/old-folder")
+        self.client._ftp.delete.assert_called_once_with("/old.txt")
+        self.client._ftp.rmd.assert_called_once_with("/old-folder")
+
+    def test_download_bytes_collects_streamed_file(self) -> None:
+        def transfer(_command, callback, blocksize=8192):
+            callback(b"hello")
+            callback(b" world")
+            return "226 Transfer complete."
+
+        self.client._ftp.retrbinary.side_effect = transfer
+        self.assertEqual(self.client.download_bytes("/notes.txt"), b"hello world")
+
+    def test_upload_bytes_streams_binary_payload(self) -> None:
+        captured = {}
+
+        def transfer(command, stream, blocksize=8192):
+            captured["command"] = command
+            captured["content"] = stream.read()
+            captured["blocksize"] = blocksize
+            return "226 Transfer complete."
+
+        self.client._ftp.storbinary.side_effect = transfer
+        result = self.client.upload_bytes(b"hello", "/notes.txt")
+        self.assertEqual(result, "226 Transfer complete.")
+        self.assertEqual(captured["command"], "STOR /notes.txt")
+        self.assertEqual(captured["content"], b"hello")
+
+    def test_download_writes_atomically_to_destination(self) -> None:
+        def transfer(_command, callback, blocksize=8192):
+            callback(b"downloaded")
+            return "226 Transfer complete."
+
+        self.client._ftp.retrbinary.side_effect = transfer
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "notes.txt"
+            result = self.client.download("/notes.txt", target)
+            self.assertEqual(result, target)
+            self.assertEqual(target.read_bytes(), b"downloaded")
+            self.assertEqual(list(Path(folder).iterdir()), [target])
+
+    def test_upload_streams_local_file(self) -> None:
+        captured = {}
+
+        def transfer(command, stream, blocksize=8192):
+            captured["command"] = command
+            captured["content"] = stream.read()
+            return "226 Transfer complete."
+
+        self.client._ftp.storbinary.side_effect = transfer
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "local.txt"
+            source.write_bytes(b"local payload")
+            self.client.upload(source, "/remote.txt")
+        self.assertEqual(captured["command"], "STOR /remote.txt")
+        self.assertEqual(captured["content"], b"local payload")
+
+    def test_ftp_protocol_errors_use_sdk_exception(self) -> None:
+        self.client._ftp.cwd.side_effect = error_perm("550 Permission denied")
+        with self.assertRaises(StoreLimitlessFTPError):
+            self.client.cwd("/restricted")
+
+    def test_connection_errors_use_sdk_connection_exception(self) -> None:
+        from storelimitless import StoreLimitlessConnectionError
+
+        self.client._ftp.pwd.side_effect = OSError("socket closed")
+        with self.assertRaises(StoreLimitlessConnectionError):
+            self.client.pwd()
+
+
+class UserFTPConnectionTests(unittest.TestCase):
+    """Ensure authenticated User objects pass their account credentials to FTP."""
+
+    def test_connect_ftp_uses_same_account_credentials(self) -> None:
+        user = object.__new__(User)
+        user.username = "demo"
+        user.password = "secret"
+        with patch("storelimitless.ftp.FTPClient.from_user", return_value="ftp-client") as connect:
+            result = user.connect_ftp("10.0.0.5", port=2121, timeout=10, passive=False)
+        self.assertEqual(result, "ftp-client")
+        connect.assert_called_once_with(
+            user, "10.0.0.5", port=2121, timeout=10, passive=False
+        )
 
 
 class UserTaskManagementTests(unittest.TestCase):

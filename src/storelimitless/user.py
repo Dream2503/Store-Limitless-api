@@ -23,6 +23,7 @@ from .tasks import TorrentPreview, UploadJob, UploadTask
 from .tree import FileTree
 
 if TYPE_CHECKING:
+    from .ftp import FTPClient
     from .directory import Directory, DirectoryResult
     from .file import File
 
@@ -188,6 +189,31 @@ class User:
             return FileTree.from_payload(self, raw_directories, raw_files, storage_used)
         except (ValueError, TypeError, KeyError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid file-tree response") from error
+
+    def connect_ftp(
+            self,
+            host: str,
+            *,
+            port: int = 2121,
+            timeout: float = 30.0,
+            passive: bool = True,
+    ) -> FTPClient:
+        """Connect to the app's separate FTP service using this account.
+
+        The FTP host must be the actual StoreLimitless server address. The
+        Vercel HTTPS API proxy does not forward FTP traffic. The default app
+        listener is port 2121 and uses plain FTP unless separately configured
+        for TLS; do not send credentials over an untrusted network.
+        """
+        from .ftp import FTPClient
+
+        return FTPClient.from_user(
+            self,
+            host,
+            port=port,
+            timeout=timeout,
+            passive=passive,
+        )
 
     def logout(self) -> None:
         """End the current login and revoke links bound to that login session.

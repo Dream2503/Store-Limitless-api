@@ -14,6 +14,7 @@ The main public objects are:
 * :class:`FileTree`: an account-wide snapshot that includes active and trashed objects.
 * :class:`UploadTask` and :class:`UploadJob`: wrappers for cross-device task-tray state and lifecycle.
 * :class:`TorrentPreview`: file metadata resolved from a magnet link before downloading payload bytes.
+* :class:`FTPClient`: an optional, separate FTP client for the app's virtual filesystem.
 
 The SDK also supports streamed ZIP64 downloads, session-bound file links that can be revoked at logout,
 file metadata refresh, torrent previews, and typed access to the server's expanded upload progress model.
@@ -117,8 +118,7 @@ the SDK can attempt re-authentication if the server explicitly reports an invali
 of a ``User`` object, and never store the password in source control.
 
 Authenticated requests include the bearer access token automatically. The login endpoint used by the current server accepts the username and password
-as query parameters. Use HTTPS when connecting across an untrusted network, and configure server and proxy logs carefully because URL query parameters
-can be recorded in access logs.
+as a JSON request body. The SDK sends those credentials in JSON, not in URL query parameters.
 
 The public object model
 =======================
@@ -128,7 +128,7 @@ StoreLimitless
 
 ``StoreLimitless`` is a class-level API namespace. It is not instantiated.
 
-* ``StoreLimitless.initialize(server_path=None, server_ip="http://127.0.0.1:8000")`` configures the base URL and checks/starts the server.
+* ``StoreLimitless.initialize(server_path=None, server_ip="http://127.0.0.1:8000", fallback_to_local=True)`` checks the exact ``/public/ready`` response and optionally falls back to a local packaged server if a remote host is unavailable.
 * ``StoreLimitless.register(first_name, last_name, username, password)`` creates an account.
 * ``StoreLimitless.login(username, password)`` authenticates and returns a ``User``.
 * ``StoreLimitless.close()`` shuts down the locally managed server process, if one was started by the SDK.
@@ -149,6 +149,7 @@ A ``User`` represents the authenticated account.
 * ``user.search(query, trash=False)`` searches file and directory metadata across the account. Pass ``trash=True`` to search trashed items.
 * ``user.move(items, destination)`` sends a batch of :class:`File` and/or :class:`Directory` objects to an existing destination directory. Inspect the
   returned per-item results; not every item is guaranteed to move.
+* ``user.connect_ftp(host, port=2121, ...)`` opens the app's separate FTP virtual filesystem using the same account credentials. The host is the actual server address, not the Vercel HTTP proxy.
 
 Directory and remote paths
 --------------------------
@@ -164,6 +165,7 @@ object or path string used in navigation and move operations identifies a remote
 * ``directory.mkdir(name)`` creates a child directory.
 * ``directory.search(query, trash=False)`` performs account-wide server-side search. ``directory.find(query, trash=False)`` is a compatibility alias
   for that search; it is not limited to the current subtree.
+* ``directory.import_link(link, ...)`` starts an asynchronous HTTP(S), Google Drive, YouTube, Telegram-message, or torrent import and returns an ``UploadJob``.
 * ``directory.upload(source, data_center="Discord", ...)`` uploads a local file or imports an HTTP(S) URL.
 * ``directory.rename(name)`` renames the directory. The server also updates descendant paths.
 * ``directory.move(destination)`` moves the directory into an existing destination. Moving a directory into itself or a descendant is rejected by the
@@ -198,6 +200,13 @@ Example directory navigation and creation:
     # Create a folder under the current remote directory.
     projects: Directory = home.mkdir("projects")
 
+
+
+FTPClient
+---------
+
+`User.connect_ftp(host, port=2121)` opens the application's separate FTP service. Its virtual `/` maps to the StoreLimitless `/home` directory. `FTPClient` supports listing, navigation, folder creation, rename/move, trash operations, file size and modification time, streaming download, and upload. FTP is not served by the Vercel HTTP proxy: connect to the address of the machine running StoreLimitless. The app's default FTP listener is plain FTP on port 2121; username, password, and file contents are not encrypted unless the server is separately configured for TLS. Do not expose plain FTP to untrusted networks.
+
 DirectoryResult
 ---------------
 
@@ -218,8 +227,9 @@ A ``File`` holds remote metadata such as its name, parent directory, size, media
   ``Path``.
 * ``file.stream(application="vlc")`` creates a stream link and opens it with the requested player executable. With the default ``"vlc"``, the SDK
   checks for VLC and may attempt installation on supported platforms if it is not found. Pass another executable name/path to use a different player.
-* ``file.public_link(download=False)`` creates a public stream URL. Use ``download=True`` to request a download URL instead. Treat these URLs like
-  bearer secrets.
+* ``file.public_link(download=False)`` creates a legacy public stream/download URL. Treat these URLs like bearer secrets.
+* ``file.public_share_link(download=False)`` and ``file.public_metadata()`` use the app's modern opaque share ID.
+* ``file.read_bytes()``, ``file.read_text()``, and ``file.save_text()`` support bounded file reads and text/source editing (the backend enforces its editable extension list and 5 MB save limit).
 * ``file.rename(name)`` renames the remote file.
 * ``file.move(destination)`` moves the file into an existing destination directory.
 * ``file.rm()`` moves the file to the trash.
@@ -590,12 +600,14 @@ use.
 """
 
 from .auth import StoreLimitless
+from .ftp import FTPClient
 from .directory import Directory, DirectoryResult
 from .exception import (
     StoreLimitlessConnectionError,
     StoreLimitlessError,
     StoreLimitlessHTTPError,
     StoreLimitlessResponseError,
+    StoreLimitlessFTPError,
 )
 from .file import File
 from .user import User
@@ -614,6 +626,8 @@ __all__ = [
     "StoreLimitlessConnectionError",
     "StoreLimitlessHTTPError",
     "StoreLimitlessResponseError",
+    "StoreLimitlessFTPError",
+    "FTPClient",
     "File",
     "User",
 ]

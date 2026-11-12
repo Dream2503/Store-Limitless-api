@@ -20,7 +20,8 @@ environments, which the SDK can launch when the configured local server is not a
 - Create public stream/download links and launch media in VLC or another player.
 - Rename and move individual files or folders, or use a batch move for multiple items.
 - Move files and directories to trash, restore them, and permanently delete trashed items.
-- Use exported exceptions to handle connection errors, HTTP errors, and malformed server responses.
+- Use exported exceptions to handle connection errors, HTTP/FTP errors, and malformed server responses.
+- Connect to the optional, separate FTP virtual filesystem using the same account credentials.
 
 ## Requirements
 
@@ -176,6 +177,8 @@ from storelimitless import (
     UploadJob,
     UploadTask,
     StoreLimitless,
+    FTPClient,
+    StoreLimitlessFTPError,
     StoreLimitlessConnectionError,
     StoreLimitlessError,
     StoreLimitlessHTTPError,
@@ -214,6 +217,8 @@ This is a class-level API namespace and is not instantiated.
 | `user.preview_torrent(link)`                           | Resolve torrent name and file indices/sizes without downloading payload bytes.                                         |
 | `user.upload_tasks`, `user.upload_jobs`                | List cross-device Task-tray batch and child-job snapshots.                                                             |
 | `user.create_upload_task(...)`                         | Register task-tray metadata; does not itself start a file transfer.                                                   |
+| `user.clear_upload_tasks()`                             | Cancel active batches and clear the account's task tray.                                                            |
+| `user.connect_ftp(host, port=2121, ...)`                 | Connect to the separate FTP virtual filesystem on the backend host.                                                |
 | `user.get_upload_job(job_id)`                           | Retrieve current status for a known upload/import job.                                                                |
 | `user.create_zip_link(items)`                           | Create a session-bound ZIP64 download URL and return its expiry.                                                      |
 | `user.download_zip(items, ...)`                         | Stream selected files/folders into a local ZIP64 archive.                                                             |
@@ -232,7 +237,8 @@ A `Directory` represents a **remote StoreLimitless directory**, not a directory 
 | `directory.mkdir(name)`                                | Create a child directory and return its refreshed object.                                     |
 | `directory.search(query, trash=False)`                 | Account-wide server-side search. It is not limited to the current subtree.                    |
 | `directory.find(query, trash=False)`                   | Compatibility alias for `search`.                                                             |
-| `directory.upload(source, data_center="Discord", ...)` | Upload a local path or import an HTTP(S) URL.                                                 |
+| `directory.import_link(link, ...)`                     | Start an asynchronous HTTP(S), Google Drive, YouTube, Telegram-message, or torrent import and return an `UploadJob`. |
+| `directory.upload(source, data_center="Discord", ...)` | Upload a local path or wait for one resulting HTTP(S)-imported file. |
 | `directory.rename(name)`                               | Rename the directory; the server updates descendant paths.                                    |
 | `directory.move(destination)`                          | Move the directory into an existing destination directory.                                    |
 | `directory.rm()`                                       | Move the directory to the trash.                                                              |
@@ -713,6 +719,7 @@ The SDK-specific exceptions are available directly from `storelimitless`:
 | `StoreLimitlessConnectionError` | Connection, request timeout, server startup, or upload-job timeout failure.                               |
 | `StoreLimitlessHTTPError`       | The server returned an unsuccessful HTTP status. Inspect `error.status_code` and the message.             |
 | `StoreLimitlessResponseError`   | The response was successful or received, but its JSON/schema/content did not match what the SDK expected. |
+| `StoreLimitlessFTPError`         | The FTP server rejected a command, such as a missing path or denied operation. |
 
 Example:
 
@@ -723,6 +730,7 @@ from storelimitless import (
     StoreLimitlessError,
     StoreLimitlessHTTPError,
     StoreLimitlessResponseError,
+    StoreLimitlessFTPError,
 )
 
 try:
@@ -809,6 +817,7 @@ Python methods above; request and response schemas remain the responsibility of 
 | `DELETE /auth/trash/directory/{did}`       | Permanently delete a trashed directory.                                        |
 | `GET /auth/tree` | Return the complete active and trashed file tree with the storage total. |
 | `GET /auth/file/{fid}/metadata` | Fetch fresh metadata for a specific file. |
+| `GET /public/metadata/{token}` | Fetch minimal metadata for a public share token or opaque share ID. |
 | `PUT /auth/file/{fid}/content` | Replace a supported text/source file (maximum 5 MB) while retaining its file ID. |
 | `POST /auth/file/{fid}/private-stream-link` | Create a stream link bound to the current login session. |
 | `POST /auth/file/{fid}/download-link` | Create a download link bound to the current login session. |
@@ -819,6 +828,7 @@ Python methods above; request and response schemas remain the responsibility of 
 | `GET /auth/upload-batches` | List task-tray batch snapshots. |
 | `PATCH /auth/upload-batches/{batch_id}` | Publish task and per-item progress. |
 | `POST /auth/upload-batches/{batch_id}/cancel` | Cancel the current batch and queued items. |
+| `DELETE /auth/upload-batches` | Cancel active batches and clear the entire task tray. |
 | `DELETE /auth/upload-batches/{batch_id}` | Dismiss a terminal task from the tray. |
 | `GET /auth/upload-jobs` | List upload/import jobs and current snapshots. |
 | `GET /auth/upload-jobs/{job_id}/status` | Fetch download/upload progress, speeds, ETA and torrent status. |
@@ -841,6 +851,36 @@ python -m unittest discover -s tests -v
 ```
 
 The repository does not currently configure CI to run these tests automatically. Run this command locally before releasing a package.
+
+## FTP client (separate TCP service)
+
+The StoreLimitless app also starts a separate FTP listener on the machine running the backend. The Python SDK exposes it through `User.connect_ftp()` and `FTPClient`:
+
+```python
+from storelimitless import FTPClient
+
+# Connect to the actual backend host, not cdn-storelimitless.vercel.app.
+with user.connect_ftp("YOUR_BACKEND_HOST", port=2121) as ftp:
+    print("Virtual root:", ftp.pwd())
+    print("Root entries:", ftp.listdir())
+
+    ftp.mkdir("/projects")
+    ftp.upload("./report.pdf", "/projects/report.pdf")
+    # APPE follows backend semantics and is rejected when the path already exists.
+    # ftp.append_bytes(b"tail", "/projects/new-file.txt")
+    print("Remote size:", ftp.size("/projects/report.pdf"))
+
+    ftp.download("/projects/report.pdf", "./downloads/report.pdf")
+    details = ftp.listdir_details("/projects")
+    ftp.rename("/projects/report.pdf", "/projects/final-report.pdf")
+
+    # FTP DELE/RMD are soft-delete operations in the StoreLimitless filesystem.
+    ftp.delete("/projects/final-report.pdf")
+```
+
+The FTP server maps its virtual `/` to the user's StoreLimitless `/home`. It supports directory listing/navigation, MLSD detail listings, folder creation, rename/move, file reads/writes/appends where allowed, size/time metadata, and trash operations. `FTPClient.delete()` and `FTPClient.rmdir()` invoke the backend's soft-delete behavior; permanent deletion remains an authenticated HTTP API operation. Uploads are staged on the backend and transferred into the configured storage provider when the FTP transfer closes. Overwriting a path follows the backend's FTP behavior and moves the previous record to trash.
+
+**Important network and security distinction:** FTP is not an HTTP route and is not forwarded by the Vercel API proxy. Connect to the backend machine's own reachable address on TCP port `2121`; opening the CDN's HTTPS URL does not expose the FTP service. The app's default FTP listener uses plain FTP, which does not encrypt usernames, passwords, or file contents. Do not use it across an untrusted network unless the server is separately configured for TLS and its firewall/passive-port configuration is correct. This SDK wrapper does not enable FTPS by default.
 
 ## Optional live smoke test
 
