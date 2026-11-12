@@ -160,6 +160,57 @@ class File:
         route: str = "download" if download else "stream"
         return f"{StoreLimitless.API_URL}/public/{route}/{token}"
 
+    def public_share_id(self) -> str:
+        """Create or retrieve the opaque share ID used by modern public URLs."""
+        response = StoreLimitless.request(self.user, "POST", f"/auth/file/{self.id}/public-link")
+        try:
+            data: Any = response.json()
+            share_id: Any = data.get("share_id") if isinstance(data, dict) else None
+            if not isinstance(share_id, str) or not share_id:
+                raise TypeError("share_id must be a non-empty string")
+            return share_id
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid public share response"
+            ) from error
+
+    def public_share_link(self, *, download: bool = False) -> str:
+        """Return a modern public URL using the opaque share ID.
+
+        Unlike the legacy token returned by ``public_link()``, share IDs are
+        the identifiers used by the app's compact ``/s/{share_id}`` sharing
+        experience and are accepted by the public stream/download routes.
+        """
+        share_id = self.public_share_id()
+        route = "download" if download else "stream"
+        return f"{StoreLimitless.API_URL}/public/{route}/{share_id}"
+
+    def public_metadata(self) -> dict[str, Any]:
+        """Fetch the minimal metadata exposed by the public share endpoint.
+
+        This uses the opaque share ID and does not require a bearer token for
+        the metadata request. The returned object contains id, name, type and
+        size; use metadata() for the authenticated file endpoint.
+        """
+        share_id = self.public_share_id()
+        response = StoreLimitless.request(None, "GET", f"/public/metadata/{share_id}")
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict):
+                raise TypeError("expected a JSON object")
+            if data.get("id") != self.id or not isinstance(data.get("name"), str):
+                raise TypeError("missing or invalid public file identity")
+            if not isinstance(data.get("type"), str):
+                raise TypeError("missing or invalid public file type")
+            size = data.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise TypeError("missing or invalid public file size")
+            return data
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned invalid public file metadata"
+            ) from error
+
     def private_stream_link(self) -> tuple[str, int]:
         """Create a stream URL bound to the current login session.
 
@@ -229,6 +280,102 @@ class File:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned invalid file metadata") from error
 
+    def read_bytes(self, *, max_bytes: int = 64 * 1024 * 1024) -> bytes:
+        """Read file contents into memory with an explicit size ceiling.
+
+        Use ``download()`` for large files. This helper is intended for
+        programmatic access to reasonably sized files and uses a private,
+        session-bound download URL rather than creating a public share.
+        """
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
+
+        metadata = self.metadata()
+        if metadata["size"] > max_bytes:
+            raise ValueError(f"File exceeds the configured {max_bytes}-byte read limit")
+
+        download_url, _expires_in = self.private_download_link()
+        response = StoreLimitless.request(
+            self.user,
+            "GET",
+            download_url.removeprefix(StoreLimitless.API_URL),
+            stream=True,
+            timeout=(15, 120),
+        )
+        content = bytearray()
+        with response:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                content.extend(chunk)
+                if len(content) > max_bytes:
+                    raise ValueError(f"File exceeds the configured {max_bytes}-byte read limit")
+        return bytes(content)
+
+    def read_text(
+            self,
+            *,
+            encoding: str = "utf-8",
+            errors: str = "strict",
+            max_bytes: int = 5_000_000,
+    ) -> str:
+        """Read a supported text/source file using bounded-memory retrieval.
+
+        The server enforces the editable-extension allowlist on save. Reading
+        uses the same conservative default 5 MB limit to avoid loading large
+        media files into memory accidentally.
+        """
+        try:
+            return self.read_bytes(max_bytes=max_bytes).decode(encoding, errors=errors)
+        except (LookupError, UnicodeDecodeError) as error:
+            raise StoreLimitlessResponseError(
+                "File content could not be decoded with the requested encoding"
+            ) from error
+
+    def save_text(self, content: str, *, encoding: str = "utf-8", max_bytes: int = 5_000_000) -> File:
+        """Replace this file's contents while preserving its remote file ID.
+
+        The backend currently accepts text/source files up to 5 MB. A failed
+        save raises the server's normal HTTP exception and leaves this snapshot
+        unchanged.
+        """
+        if not isinstance(content, str):
+            raise TypeError("content must be a string")
+        if max_bytes <= 0 or max_bytes > 5_000_000:
+            raise ValueError("max_bytes must be between 1 and 5,000,000")
+
+        try:
+            payload = content.encode(encoding)
+        except (LookupError, UnicodeEncodeError) as error:
+            raise ValueError("content cannot be encoded with the requested encoding") from error
+        if len(payload) > max_bytes:
+            raise ValueError(f"Edited content exceeds the {max_bytes}-byte limit")
+
+        response = StoreLimitless.request(
+            self.user,
+            "PUT",
+            f"/auth/file/{self.id}/content",
+            data=payload,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=(15, 120),
+        )
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict) or data.get("id") != self.id:
+                raise TypeError("missing or invalid file identity")
+            size = data.get("size")
+            name = data.get("name")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0 or not isinstance(name, str):
+                raise TypeError("missing or invalid saved file metadata")
+            self.name = name
+            self.size = size
+            modified_at = parse_datetime(data.get("modified_at"))
+            if modified_at is not None:
+                self.modified_at = modified_at
+            return self
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError("StoreLimitless server returned an invalid text-save response") from error
+
     def download(self, path: str | Path | None = None, *, quiet: bool = False) -> Path:
         """Download this file to a local path with bounded-memory streaming.
 
@@ -246,10 +393,11 @@ class File:
                 metadata.
         """
         output_path: Path = Path(path) if path is not None else Path(self.name)
+        download_url, _expires_in = self.private_download_link()
         response: Response = StoreLimitless.request(
             self.user,
             "GET",
-            self.public_link(download=True).removeprefix(StoreLimitless.API_URL),
+            download_url.removeprefix(StoreLimitless.API_URL),
             stream=True,
             timeout=(15, 120),
         )

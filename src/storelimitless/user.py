@@ -23,6 +23,7 @@ from .tasks import TorrentPreview, UploadJob, UploadTask
 from .tree import FileTree
 
 if TYPE_CHECKING:
+    from .ftp import FTPClient
     from .directory import Directory, DirectoryResult
     from .file import File
 
@@ -189,6 +190,31 @@ class User:
         except (ValueError, TypeError, KeyError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid file-tree response") from error
 
+    def connect_ftp(
+            self,
+            host: str,
+            *,
+            port: int = 2121,
+            timeout: float = 30.0,
+            passive: bool = True,
+    ) -> FTPClient:
+        """Connect to the app's separate FTP service using this account.
+
+        The FTP host must be the actual StoreLimitless server address. The
+        Vercel HTTPS API proxy does not forward FTP traffic. The default app
+        listener is port 2121 and uses plain FTP unless separately configured
+        for TLS; do not send credentials over an untrusted network.
+        """
+        from .ftp import FTPClient
+
+        return FTPClient.from_user(
+            self,
+            host,
+            port=port,
+            timeout=timeout,
+            passive=passive,
+        )
+
     def logout(self) -> None:
         """End the current login and revoke links bound to that login session.
 
@@ -299,6 +325,23 @@ class User:
             return UploadTask(self, batch_id, seed)
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload-task creation response") from error
+
+    def clear_upload_tasks(self) -> dict[str, Any]:
+        """Cancel active tasks and clear the account's shared upload tray."""
+        response = StoreLimitless.request(self, "DELETE", "/auth/upload-batches")
+        try:
+            payload: Any = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
+                raise TypeError("expected a response message")
+            return payload
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid upload-tray clear response"
+            ) from error
+
+    def clear_upload_batches(self) -> dict[str, Any]:
+        """Alias for clear_upload_tasks(), matching the backend's batch terminology."""
+        return self.clear_upload_tasks()
 
     @property
     def upload_jobs(self) -> list[UploadJob]:

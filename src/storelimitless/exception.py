@@ -13,6 +13,10 @@ class StoreLimitlessResponseError(StoreLimitlessError):
     """Raised when a successful HTTP response does not match the expected schema."""
 
 
+class StoreLimitlessFTPError(StoreLimitlessError):
+    """Raised when the StoreLimitless FTP server rejects an FTP command."""
+
+
 class StoreLimitlessHTTPError(StoreLimitlessError):
     """Raised for non-success HTTP responses from the StoreLimitless server."""
 
