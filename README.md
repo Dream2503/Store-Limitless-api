@@ -839,6 +839,22 @@ python -m unittest discover -s tests -v
 
 The repository does not currently configure CI to run these tests automatically. Run this command locally before releasing a package.
 
+## Optional live smoke test
+
+A live test is provided for a **dedicated throwaway account**. It creates a uniquely named temporary folder, uploads files, edits and downloads them, exercises file/folder movement, public and private download links, ZIP download, task updates, trash and restore, and then cleans up its test folder.
+
+It is intentionally disabled unless all required environment variables are supplied. Do not point it at an account containing important data.
+
+```bash
+export STORELIMITLESS_E2E_API_URL="https://cdn-storelimitless.vercel.app"
+export STORELIMITLESS_E2E_USERNAME="your-disposable-test-account"
+export STORELIMITLESS_E2E_PASSWORD="your-test-password"
+export STORELIMITLESS_E2E_ALLOW_MUTATIONS="1"
+python tests/live_smoke.py
+```
+
+The live test requires a configured and available storage data center on the server. It does not test registration because the backend does not expose account deletion; registration request/response construction is covered by unit tests. Keep the test account credentials out of source control.
+
 ## Security and operational notes
 
 - Use HTTPS whenever traffic crosses a network you do not fully trust.
