@@ -267,22 +267,25 @@ first_file = listing.file
 A `File` object represents a stored remote file and exposes metadata including `id`, `name`, `type`, `size`,
 `modified_at`, `deleted_at`, `data_center`, and its parent `directory`.
 
-| Method                                  | Description                                                                                         |
-|-----------------------------------------|-----------------------------------------------------------------------------------------------------|
-| `file.download(path=None, quiet=False)` | Download to a local path, showing progress by default; returns the destination as a `pathlib.Path`. |
-| `file.public_link(download=False)`      | Create a signed public stream URL. Use `download=True` for a download URL.                          |
-| `file.private_stream_link()`             | Return a session-bound streaming URL and server-reported expiry.                                   |
-| `file.private_download_link()`            | Return a session-bound attachment URL and server-reported expiry.                                  |
-| `file.metadata()`                         | Fetch the current server metadata for this file.                                                   |
-
-| `file.read_text(encoding="utf-8", max_bytes=5_000_000)` | Read a supported text/source file with a bounded-memory download. |
-| `file.save_text(content, encoding="utf-8", max_bytes=5_000_000)` | Replace a supported text/source file while preserving its remote file ID. |
-| `file.stream(application="vlc")`        | Open the public stream URL in the requested player executable and wait for the player to exit.      |
-| `file.rename(name)`                     | Rename the remote file and update this object's name.                                               |
-| `file.move(destination)`                | Move the file into an existing directory.                                                           |
-| `file.rm()`                             | Move the file to the trash.                                                                         |
-| `file.restore()`                        | Restore a trashed file.                                                                             |
-| `file.delete()`                         | Permanently delete a file already in the trash.                                                     |
+| Method | Description |
+|---|---|
+| `file.download(path=None, quiet=False)` | Download to a local path using a session-bound link; returns the destination `Path`. |
+| `file.read_bytes(max_bytes=64*1024*1024)` | Read a bounded-size file into memory without creating a public share. |
+| `file.read_text(encoding="utf-8", max_bytes=5_000_000)` | Read a supported text/source file using a bounded-memory download. |
+| `file.save_text(content, encoding="utf-8", max_bytes=5_000_000)` | Replace supported text/source content while preserving the remote file ID. |
+| `file.public_link(download=False)` | Create a legacy signed public stream/download URL. |
+| `file.public_share_id()` | Create or retrieve the opaque share ID used by modern public URLs. |
+| `file.public_share_link(download=False)` | Create a public stream/download URL using the opaque share ID. |
+| `file.public_metadata()` | Read the minimal public metadata exposed for the opaque share ID. |
+| `file.private_stream_link()` | Return a session-bound streaming URL and server-reported expiry. |
+| `file.private_download_link()` | Return a session-bound attachment URL and server-reported expiry. |
+| `file.metadata()` | Fetch the current authenticated metadata for this file. |
+| `file.stream(application="vlc", private=False)` | Open the stream in a media player; set `private=True` to use a session-bound stream link. |
+| `file.rename(name)` | Rename the remote file and update this object's name. |
+| `file.move(destination)` | Move the file into an existing directory. |
+| `file.rm()` | Move the file to the trash. |
+| `file.restore()` | Restore a trashed file. |
+| `file.delete()` | Permanently delete a file already in the trash. |
 
 ## Directory navigation and folder creation
 

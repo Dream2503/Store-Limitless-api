@@ -387,6 +387,19 @@ class FileSecurityAndSharingTests(unittest.TestCase):
         self.assertTrue(url.endswith("/public/stream/opaque-share-id"))
         request.assert_called_once_with(self.file.user, "POST", "/auth/file/7/public-link")
 
+    def test_public_metadata_uses_opaque_share_id(self) -> None:
+        response = SimpleNamespace(json=lambda: {
+            "id": 7,
+            "name": "notes.txt",
+            "type": "text/plain",
+            "size": 5,
+        })
+        with patch.object(self.file, "public_share_id", return_value="opaque-share-id"), \
+             patch("storelimitless.auth.StoreLimitless.request", return_value=response) as request:
+            metadata = self.file.public_metadata()
+        self.assertEqual(metadata["name"], "notes.txt")
+        request.assert_called_once_with(None, "GET", "/public/metadata/opaque-share-id")
+
     def test_download_uses_session_bound_url(self) -> None:
         class FakeResponse:
             headers = {"Content-Length": "5"}

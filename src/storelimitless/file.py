@@ -185,6 +185,32 @@ class File:
         route = "download" if download else "stream"
         return f"{StoreLimitless.API_URL}/public/{route}/{share_id}"
 
+    def public_metadata(self) -> dict[str, Any]:
+        """Fetch the minimal metadata exposed by the public share endpoint.
+
+        This uses the opaque share ID and does not require a bearer token for
+        the metadata request. The returned object contains id, name, type and
+        size; use metadata() for the authenticated file endpoint.
+        """
+        share_id = self.public_share_id()
+        response = StoreLimitless.request(None, "GET", f"/public/metadata/{share_id}")
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict):
+                raise TypeError("expected a JSON object")
+            if data.get("id") != self.id or not isinstance(data.get("name"), str):
+                raise TypeError("missing or invalid public file identity")
+            if not isinstance(data.get("type"), str):
+                raise TypeError("missing or invalid public file type")
+            size = data.get("size")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                raise TypeError("missing or invalid public file size")
+            return data
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned invalid public file metadata"
+            ) from error
+
     def private_stream_link(self) -> tuple[str, int]:
         """Create a stream URL bound to the current login session.
 
