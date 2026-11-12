@@ -884,9 +884,9 @@ The FTP server maps its virtual `/` to the user's StoreLimitless `/home`. It sup
 
 ## Optional live smoke test
 
-A live test is provided for a **dedicated throwaway account**. It creates a uniquely named temporary folder, uploads files, edits and downloads them, exercises file/folder movement, public and private download links, ZIP download, task updates, trash and restore, and then cleans up its test folder.
+A live test is provided for a **dedicated throwaway account**. On its first run it registers the account using the configured credentials; subsequent runs reuse it. It creates a uniquely named temporary folder, exercises local upload, byte/text reads, download, text editing, file and folder moves, public/private links, ZIP download, task-tray lifecycle, trash, restore, and permanent deletion of disposable fixtures, then cleans up the test folder. Configure the three `STORELIMITLESS_E2E_*` repository secrets shown in `.github/workflows/sdk-tests.yml` and explicitly set `STORELIMITLESS_E2E_ALLOW_MUTATIONS=1` to enable these production mutations.
 
-It is intentionally disabled unless all required environment variables are supplied. Do not point it at an account containing important data.
+It is intentionally disabled unless all required environment variables are supplied. The first enabled run registers the dedicated test account; the backend has no account-deletion endpoint, so that account remains available for later runs. Do not use a personal account or point the test at an account containing important data.
 
 ```bash
 export STORELIMITLESS_E2E_API_URL="https://cdn-storelimitless.vercel.app"
@@ -896,7 +896,7 @@ export STORELIMITLESS_E2E_ALLOW_MUTATIONS="1"
 python tests/live_smoke.py
 ```
 
-The live test requires a configured and available storage data center on the server. It does not test registration because the backend does not expose account deletion; registration request/response construction is covered by unit tests. Keep the test account credentials out of source control.
+The live test requires a configured and available storage data center on the server. It tests registration on the account's first run and login on every run. Because the server has no account-deletion endpoint, the dedicated E2E account is intentionally persistent; the uniquely named test folder and its contents are cleaned up. Keep the test account credentials in GitHub Actions secrets, never source control.
 
 ## Security and operational notes
 

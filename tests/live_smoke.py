@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from zipfile import is_zipfile
 
-from storelimitless import StoreLimitless
+from storelimitless import StoreLimitless, StoreLimitlessHTTPError
 
 
 API_URL = os.getenv("STORELIMITLESS_E2E_API_URL", "https://cdn-storelimitless.vercel.app")
@@ -40,6 +40,12 @@ class LiveBackendSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         StoreLimitless.initialize(server_ip=API_URL, fallback_to_local=False)
+        # Create the dedicated E2E account on its first run. Later runs reuse it.
+        try:
+            StoreLimitless.register("StoreLimitless", "E2E", USERNAME, PASSWORD)
+        except StoreLimitlessHTTPError as error:
+            if error.status_code != 400:
+                raise
         cls.user = StoreLimitless.login(USERNAME, PASSWORD)
         cls.folder_name = f"sdk-e2e-{uuid.uuid4().hex[:12]}"
         cls.root = cls.user.home.mkdir(cls.folder_name)
@@ -77,11 +83,24 @@ class LiveBackendSmokeTests(unittest.TestCase):
         original_id = uploaded.id
         self.assertEqual(uploaded.read_text(), "StoreLimitless SDK live smoke test\n")
 
+        self.assertEqual(uploaded.read_bytes(), b"StoreLimitless SDK live smoke test\n")
+
+        downloaded_path = self.local_dir / "downloaded-smoke.txt"
+        uploaded.download(downloaded_path, quiet=True)
+        self.assertEqual(downloaded_path.read_text(encoding="utf-8"), "StoreLimitless SDK live smoke test\n")
+
         uploaded.save_text("Updated by the StoreLimitless SDK\n")
         self.assertEqual(uploaded.id, original_id)
         self.assertEqual(uploaded.read_text(), "Updated by the StoreLimitless SDK\n")
 
         destination = self.root.mkdir("destination")
+        movable = self.root.mkdir("move-me")
+        move_destination = self.root.mkdir("directory-destination")
+        movable.move(move_destination)
+        self.assertEqual(movable.path, move_destination.path / "move-me")
+        movable.move(self.root)
+        self.assertEqual(movable.path, self.root.path / "move-me")
+
         uploaded.rename("renamed.txt")
         uploaded.move(destination)
         self.assertEqual(uploaded.directory.path, destination.path)
@@ -135,6 +154,17 @@ class LiveBackendSmokeTests(unittest.TestCase):
         task.refresh()
         self.assertEqual(task.status, "cancelled")
         task.dismiss()
+        self.user.clear_upload_tasks()
+
+        doomed_file_source = self.local_dir / "permanent-delete.txt"
+        doomed_file_source.write_text("delete only this E2E fixture", encoding="utf-8")
+        doomed_file = self.root.upload(doomed_file_source, data_center="Discord", quiet=True)
+        doomed_file.rm()
+        doomed_file.delete()
+
+        doomed_folder = self.root.mkdir("permanent-delete-folder")
+        doomed_folder.rm()
+        doomed_folder.delete()
 
         self.root.rename(f"{self.folder_name}-renamed")
         self.assertEqual(self.root.path.name, f"{self.folder_name}-renamed")
