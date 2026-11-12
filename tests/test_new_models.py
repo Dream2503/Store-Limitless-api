@@ -402,6 +402,7 @@ class FileSecurityAndSharingTests(unittest.TestCase):
 
         response = FakeResponse()
         with patch.object(self.file, "private_download_link", return_value=("https://example.invalid/public/download/private", 60)), \
+             patch.object(StoreLimitless, "API_URL", "https://example.invalid"), \
              patch("storelimitless.file.StoreLimitless.request", return_value=response) as request, \
              patch("storelimitless.file.tqdm") as progress:
             with __import__("tempfile").TemporaryDirectory() as folder:
