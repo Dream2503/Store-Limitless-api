@@ -99,6 +99,84 @@ class TaskModelTests(unittest.TestCase):
         self.assertEqual(len(list(preview)), 3)
 
 
+class FileTextApiTests(unittest.TestCase):
+    """Exercise file text helpers without a live API server."""
+
+    def setUp(self) -> None:
+        self.user = SimpleNamespace(username="demo", token="test")
+        self.directory = SimpleNamespace(user=self.user, path=Path("/home"))
+        self.file = File(
+            directory=self.directory,  # type: ignore[arg-type]
+            id=7,
+            name="notes.txt",
+            type="text/plain",
+            size=11,
+            modified_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            deleted_at=None,
+            data_center="Discord",
+        )
+
+    def test_read_text_decodes_streamed_bytes(self) -> None:
+        from unittest.mock import Mock, patch
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def iter_content(self, chunk_size):
+                self.assert_chunk_size = chunk_size
+                yield b"hello "
+                yield b"world"
+
+        fake = FakeResponse()
+        with patch.object(self.file, "metadata", return_value={"id": 7, "name": "notes.txt", "type": "text/plain", "size": 11}), \
+             patch.object(self.file, "public_link", return_value="https://example.invalid/public/download/token"), \
+             patch("storelimitless.file.StoreLimitless.request", return_value=fake):
+            self.assertEqual(self.file.read_text(), "hello world")
+        self.assertEqual(fake.assert_chunk_size, 64 * 1024)
+
+    def test_read_text_rejects_oversized_metadata_before_download(self) -> None:
+        from unittest.mock import patch
+
+        with patch.object(self.file, "metadata", return_value={"id": 7, "name": "notes.txt", "type": "text/plain", "size": 100}), \
+             patch("storelimitless.file.StoreLimitless.request") as request:
+            with self.assertRaises(ValueError):
+                self.file.read_text(max_bytes=10)
+            request.assert_not_called()
+
+    def test_save_text_posts_raw_utf8_and_updates_snapshot(self) -> None:
+        from unittest.mock import patch
+
+        class FakeResponse:
+            def json(self):
+                return {
+                    "id": 7,
+                    "name": "notes.txt",
+                    "size": 5,
+                    "modified_at": "2026-11-12T10:00:00+00:00",
+                }
+
+        with patch("storelimitless.file.StoreLimitless.request", return_value=FakeResponse()) as request:
+            result = self.file.save_text("hello")
+        self.assertIs(result, self.file)
+        self.assertEqual(self.file.size, 5)
+        args, kwargs = request.call_args
+        self.assertEqual(args[1:3], ("PUT", "/auth/file/7/content"))
+        self.assertEqual(kwargs["data"], b"hello")
+        self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
+
+    def test_save_text_rejects_oversized_content_locally(self) -> None:
+        from unittest.mock import patch
+
+        with patch("storelimitless.file.StoreLimitless.request") as request:
+            with self.assertRaises(ValueError):
+                self.file.save_text("x" * 11, max_bytes=10)
+            request.assert_not_called()
+
+
 class FileTreeTests(unittest.TestCase):
     """Verify the whole-tree conversion preserves parent paths and deletion state."""
 
