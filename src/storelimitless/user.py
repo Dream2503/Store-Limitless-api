@@ -300,6 +300,23 @@ class User:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload-task creation response") from error
 
+    def clear_upload_tasks(self) -> dict[str, Any]:
+        """Cancel active tasks and clear the account's shared upload tray."""
+        response = StoreLimitless.request(self, "DELETE", "/auth/upload-batches")
+        try:
+            payload: Any = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
+                raise TypeError("expected a response message")
+            return payload
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid upload-tray clear response"
+            ) from error
+
+    def clear_upload_batches(self) -> dict[str, Any]:
+        """Alias for clear_upload_tasks(), matching the backend's batch terminology."""
+        return self.clear_upload_tasks()
+
     @property
     def upload_jobs(self) -> list[UploadJob]:
         """List known upload/import jobs and their latest persisted snapshots.

@@ -14,6 +14,7 @@ from tqdm import tqdm
 from .auth import StoreLimitless
 from .exception import StoreLimitlessConnectionError, StoreLimitlessHTTPError, StoreLimitlessResponseError
 from .file import File
+from .tasks import UploadJob
 from .utils import directory_from_payload
 
 if TYPE_CHECKING:
@@ -287,6 +288,78 @@ class Directory:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid directory move response") from error
 
+    def import_link(
+            self,
+            link: str,
+            data_center: Literal["Discord", "Telegram"] = "Discord",
+            *,
+            batch_id: str | None = None,
+            selected_files: list[int] | None = None,
+    ) -> UploadJob:
+        """Start an asynchronous HTTP(S), YouTube, Telegram, or torrent import.
+
+        The server performs the ingestion in the background. Refresh the
+        returned UploadJob to observe progress. For a torrent magnet, pass
+        original zero-based file indices from User.preview_torrent(); omitted
+        indices mean import every file in the torrent.
+        """
+        from json import dumps
+
+        raw_link = link.strip()
+        if not raw_link:
+            raise ValueError("Import link cannot be empty")
+
+        is_magnet = raw_link.lower().startswith("magnet:")
+        if is_magnet:
+            if not raw_link.lower().startswith("magnet:?"):
+                raise ValueError("Torrent links must use the magnet:? form")
+        elif not raw_link.lower().startswith(("http://", "https://")):
+            raise ValueError("Import link must be an HTTP(S) URL or torrent magnet URI")
+
+        if selected_files is not None:
+            if not is_magnet:
+                raise ValueError("selected_files can only be used with a torrent magnet URI")
+            if not selected_files:
+                raise ValueError("Select at least one torrent file")
+            if any(isinstance(index, bool) or not isinstance(index, int) or index < 0 for index in selected_files):
+                raise ValueError("Torrent file indices must be non-negative integers")
+            if len(set(selected_files)) != len(selected_files):
+                raise ValueError("Duplicate torrent file indices are not allowed")
+
+        if batch_id is not None and not batch_id.strip():
+            raise ValueError("batch_id cannot be empty")
+
+        params = {
+            "link": raw_link,
+            "data_center": data_center,
+            "directory": str(self.path),
+            "batch_id": batch_id or "",
+            "selected_files": dumps(selected_files) if selected_files is not None else "",
+        }
+        response = StoreLimitless.request(
+            self.user, "POST", "/auth/upload-link", params=params, timeout=60
+        )
+        try:
+            payload: Any = response.json()
+            job_id: Any = payload.get("job_id") if isinstance(payload, dict) else None
+            if not isinstance(job_id, str) or not job_id:
+                raise TypeError("job_id must be a non-empty string")
+            return UploadJob(
+                self.user,
+                job_id,
+                {
+                    "job_id": job_id,
+                    "name": raw_link,
+                    "status": "uploading",
+                    "message": "Import queued",
+                    "ingestion_type": "torrent" if is_magnet else "",
+                },
+            )
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid link-import response"
+            ) from error
+
     def upload(
             self,
             source: str | Path,
@@ -298,117 +371,117 @@ class Directory:
             poll_interval: int | float = 0.2,
             job_timeout: int | float | None = 3600.0,
     ) -> File:
-        """Upload a local file in chunks or import a file from an HTTP(S) URL.
+        """Upload one local file or synchronously import one HTTP(S) resource.
 
-        Local file uploads first create a job through ``POST /auth/upload`` and then use the authenticated ``PUT /public/upload/{job_id}/chunk``
-        route. URL imports use ``POST /auth/upload-link``. Both flows poll the public upload status endpoint and return the final :class:`File`
-        object.
-
-        Args:
-            source: A local path or HTTP(S) source URL.
-            data_center: Storage provider to use, currently ``Discord`` or ``Telegram``.
-            quiet: Disable the terminal progress bar.
-            chunk_size: Chunk size in bytes for local uploads; must be positive.
-            chunk_retries: Number of attempts for a transient failed chunk.
-            poll_interval: Seconds between status checks.
-            job_timeout: Maximum seconds to wait for a job; ``None`` waits indefinitely.
-
-        Raises:
-            FileNotFoundError: The local source does not exist.
-            ValueError: An invalid chunk size or retry count was supplied.
-            StoreLimitlessHTTPError: An API endpoint rejected the request.
-            StoreLimitlessResponseError: A response was malformed or the upload failed.
+        Local files use authenticated chunk uploads. HTTP(S) URLs use the
+        server-side import-job API and wait until the job completes. Use
+        ``import_link()`` when you want a non-blocking job object, a torrent
+        magnet, selected torrent files, or an import that may create multiple
+        files.
         """
         if chunk_size <= 0:
             raise ValueError("chunk_size must be greater than zero")
-
         if chunk_retries < 1:
             raise ValueError("chunk_retries must be at least 1")
-
         if poll_interval < 0:
             raise ValueError("poll_interval cannot be negative")
+        if job_timeout is not None and job_timeout < 0:
+            raise ValueError("job_timeout cannot be negative")
 
-        is_link: bool = isinstance(source, str) and source.lower().startswith(("http://", "https://"))
-        local_path: Path | None = None
-        total_bytes: int = 0
+        is_link = isinstance(source, str) and source.lower().startswith(("http://", "https://"))
+        is_magnet = isinstance(source, str) and source.lower().startswith("magnet:")
+        if is_magnet:
+            raise ValueError("Use Directory.import_link() for torrent magnet URIs")
 
         if is_link:
-            response = StoreLimitless.request(
-                self.user,
-                "POST",
-                "/auth/upload-link",
-                params={"link": source, "data_center": data_center, "directory": str(self.path)},
-                timeout=60,
+            existing_ids = {file.id for file in self.ls.files}
+            job = self.import_link(source, data_center=data_center)
+            started_at = monotonic()
+
+            while True:
+                if job_timeout is not None and monotonic() - started_at > job_timeout:
+                    raise StoreLimitlessConnectionError(
+                        f"Import job {job.job_id} timed out while waiting for completion"
+                    )
+                job.refresh()
+                status = job.status.lower()
+                if status == "completed":
+                    break
+                if status in {"error", "cancelled"}:
+                    raise StoreLimitlessResponseError(
+                        job.message or f"Import job {job.job_id} {status}"
+                    )
+                sleep(poll_interval)
+
+            new_files = [file for file in self.ls.files if file.id not in existing_ids]
+            if len(new_files) == 1:
+                return new_files[0]
+
+            matching = [file for file in new_files if file.name == job.name]
+            if len(matching) == 1:
+                return matching[0]
+
+            raise StoreLimitlessResponseError(
+                "Import completed, but it did not produce exactly one identifiable file. "
+                "Use Directory.import_link() and inspect the resulting job and directory listing "
+                "for multi-file imports."
             )
 
-        else:
-            local_path: Path = Path(source).expanduser()
+        local_path = Path(source).expanduser()
+        if not local_path.is_file():
+            raise FileNotFoundError(f"Upload source is not a file: {local_path}")
 
-            if not local_path.is_file():
-                raise FileNotFoundError(f"Upload source is not a file: {local_path}")
-
-            total_bytes = local_path.stat().st_size
-            response = StoreLimitless.request(
-                self.user,
-                "POST",
-                "/auth/upload",
-                headers={
-                    "X-Data-Center": data_center,
-                    "X-File-Name": local_path.name,
-                    "X-Directory": str(self.path),
-                },
-                timeout=60,
-            )
-
+        total_bytes = local_path.stat().st_size
+        response = StoreLimitless.request(
+            self.user,
+            "POST",
+            "/auth/upload",
+            headers={
+                "X-Data-Center": data_center,
+                "X-File-Name": local_path.name,
+                "X-Directory": str(self.path),
+            },
+            timeout=60,
+        )
         try:
             response_data: Any = response.json()
-            job_id: Any = response_data["job_id"] if isinstance(response_data, dict) else None
-
+            job_id: Any = response_data.get("job_id") if isinstance(response_data, dict) else None
             if not isinstance(job_id, str) or not job_id:
                 raise TypeError("job_id must be a non-empty string")
-
-        except (ValueError, KeyError, TypeError) as error:
+        except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload response") from error
 
-        if local_path is not None:
-            with local_path.open("rb") as stream:
-                offset: int = 0
+        with local_path.open("rb") as stream:
+            offset = 0
+            while True:
+                chunk = stream.read(chunk_size)
+                if not chunk and not (total_bytes == 0 and offset == 0):
+                    break
 
-                while True:
-                    chunk: bytes = stream.read(chunk_size)
-
-                    if not chunk and not (total_bytes == 0 and offset == 0):
+                for attempt in range(1, chunk_retries + 1):
+                    try:
+                        StoreLimitless.request(
+                            self.user,
+                            "PUT",
+                            f"/public/upload/{job_id}/chunk",
+                            params={"offset": offset, "total": total_bytes},
+                            headers={"Content-Type": "application/octet-stream"},
+                            data=chunk,
+                            timeout=120,
+                        )
                         break
+                    except StoreLimitlessConnectionError:
+                        if attempt >= chunk_retries:
+                            raise
+                        sleep(min(float(attempt), 3.0))
+                    except StoreLimitlessHTTPError as error:
+                        if error.status_code < 500 or attempt >= chunk_retries:
+                            raise
+                        sleep(min(float(attempt), 3.0))
 
-                    for attempt in range(1, chunk_retries + 1):
-                        try:
-                            StoreLimitless.request(
-                                self.user,
-                                "PUT",
-                                f"/public/upload/{job_id}/chunk",
-                                params={"offset": offset, "total": total_bytes},
-                                headers={"Content-Type": "application/octet-stream"},
-                                data=chunk,
-                                timeout=120,
-                            )
-                            break
-
-                        except StoreLimitlessConnectionError:
-                            if attempt >= chunk_retries:
-                                raise
-
-                            sleep(min(float(attempt), 3.0))
-
-                        except StoreLimitlessHTTPError as error:
-                            if error.status_code < 500 or attempt >= chunk_retries:
-                                raise
-
-                            sleep(min(float(attempt), 3.0))
-
-                    offset += len(chunk)
-
-                    if not chunk:
-                        break
+                offset += len(chunk)
+                if not chunk:
+                    break
 
         progress_bar = tqdm(
             total=0,
@@ -421,57 +494,61 @@ class Directory:
             ncols=get_terminal_size(fallback=(80, 24)).columns,
             bar_format="{desc} {bar} {n_fmt}/{total_fmt} {rate_fmt} ETA {remaining}",
         )
-        started_at: float = monotonic()
+        started_at = monotonic()
+        final_status: dict[str, Any] | None = None
 
         try:
             while True:
                 if job_timeout is not None and monotonic() - started_at > job_timeout:
-                    raise StoreLimitlessConnectionError(f"Upload job {job_id} timed out while waiting for completion")
+                    raise StoreLimitlessConnectionError(
+                        f"Upload job {job_id} timed out while waiting for completion"
+                    )
 
-                status_response: Response = StoreLimitless.request(self.user, "GET", f"/public/upload/{job_id}/status", timeout=30)
-
+                status_response = StoreLimitless.request(
+                    self.user, "GET", f"/public/upload/{job_id}/status", timeout=30
+                )
                 try:
                     raw_status: Any = status_response.json()
-
                     if not isinstance(raw_status, dict):
                         raise TypeError("Expected an object")
-
-                    final_status: dict = raw_status
-                    total: int = int(raw_status.get("total", 0) or 0)
-                    transfer: int = int(raw_status.get("transfer", 0) or 0)
+                    final_status = raw_status
+                    total = int(raw_status.get("total", 0) or 0)
+                    transfer = int(raw_status.get("transfer", 0) or 0)
                     progress_bar.total = max(0, total)
                     progress_bar.n = min(max(0, transfer), progress_bar.total) if progress_bar.total else max(0, transfer)
                     progress_bar.set_description(str(raw_status.get("message") or "Uploading"), refresh=False)
                     progress_bar.refresh()
-                    status_value: str = str(raw_status.get("status", "uploading")).lower()
-
+                    status_value = str(raw_status.get("status", "uploading")).lower()
                 except (ValueError, TypeError) as error:
-                    raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload status") from error
+                    raise StoreLimitlessResponseError(
+                        "StoreLimitless server returned an invalid upload status"
+                    ) from error
 
                 if status_value == "completed":
                     break
-
-                if status_value == "error":
-                    raise StoreLimitlessResponseError(str(raw_status.get("message") or f"Upload job {job_id} failed"))
-
+                if status_value in {"error", "cancelled"}:
+                    raise StoreLimitlessResponseError(
+                        str(raw_status.get("message") or f"Upload job {job_id} {status_value}")
+                    )
                 sleep(poll_interval)
-
         finally:
             progress_bar.close()
 
         if final_status is None:
             raise StoreLimitlessResponseError("StoreLimitless server returned no upload status")
 
-        file_id_raw: Any = final_status.get("file_id")
-
-        if isinstance(file_id_raw, bool) or not isinstance(file_id_raw, int):
-            raise StoreLimitlessResponseError("Upload completed but the server did not return a file ID")
+        file_id = final_status.get("file_id")
+        if isinstance(file_id, bool) or not isinstance(file_id, int):
+            raise StoreLimitlessResponseError(
+                "Upload completed but the server did not return a file ID"
+            )
 
         for file in self.ls.files:
-            if file.id == file_id_raw:
+            if file.id == file_id:
                 return file
-
-        raise StoreLimitlessResponseError(f"Upload completed but file {file_id_raw} could not be found in {self.path}")
+        raise StoreLimitlessResponseError(
+            f"Upload completed but file {file_id} could not be found in {self.path}"
+        )
 
     def rm(self) -> Directory:
         """Move this directory to the trash and return this object."""

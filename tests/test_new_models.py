@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timezone
-from unittest.mock import patch
-from storelimitless import File, FileTree, TorrentPreview, UploadJob, UploadTask
+from unittest.mock import PropertyMock, patch
+from storelimitless import Directory, File, FileTree, StoreLimitless, TorrentPreview, UploadJob, UploadTask, User
 
 
 class TaskModelTests(unittest.TestCase):
@@ -133,7 +133,7 @@ class FileTextApiTests(unittest.TestCase):
 
         fake = FakeResponse()
         with patch.object(self.file, "metadata", return_value={"id": 7, "name": "notes.txt", "type": "text/plain", "size": 11}), \
-             patch.object(self.file, "public_link", return_value="https://example.invalid/public/download/token"), \
+             patch.object(self.file, "private_download_link", return_value=("https://example.invalid/public/download/token", 3600)), \
              patch("storelimitless.file.StoreLimitless.request", return_value=fake):
             self.assertEqual(self.file.read_text(), "hello world")
         self.assertEqual(fake.assert_chunk_size, 64 * 1024)
@@ -239,6 +239,242 @@ class FileTreeTests(unittest.TestCase):
         self.assertEqual([item.path for item in tree.trashed_directories], [Path("/home/trash-folder")])
         self.assertEqual(tree.files[0].directory.path, Path("/home"))
         self.assertEqual(tree.files[1].directory.path, Path("/home/trash-folder"))
+
+
+class AuthenticationTransportTests(unittest.TestCase):
+    """Verify authentication payloads and initialization/fallback behavior."""
+
+    def test_login_sends_credentials_as_json(self) -> None:
+        response = SimpleNamespace(json=lambda: [
+            {"access_token": "test-token", "token_type": "bearer"},
+            {"username": "demo", "first_name": "Test", "last_name": "User"},
+            {"id": 1, "path": "/home"},
+        ])
+        fake_user = object()
+        with patch.object(StoreLimitless, "_is_server_running", return_value=True), \
+             patch.object(StoreLimitless, "request", return_value=response) as request, \
+             patch("storelimitless.user.User", return_value=fake_user):
+            result = StoreLimitless.login("demo", "secret")
+
+        self.assertIs(result, fake_user)
+        args, kwargs = request.call_args
+        self.assertEqual(args[1:3], ("POST", "/auth/login"))
+        self.assertEqual(kwargs["json"], {"username": "demo", "password": "secret"})
+        self.assertNotIn("params", kwargs)
+
+    def test_initialize_uses_ready_remote_without_starting_binary(self) -> None:
+        with patch.object(StoreLimitless, "_is_server_running", return_value=True), \
+             patch("storelimitless.auth.Popen") as process:
+            StoreLimitless.initialize(server_ip="https://cdn-storelimitless.vercel.app")
+        self.assertEqual(StoreLimitless.API_URL, "https://cdn-storelimitless.vercel.app")
+        process.assert_not_called()
+
+    def test_initialize_falls_back_to_local_when_remote_is_unavailable(self) -> None:
+        with patch.object(StoreLimitless, "_is_server_running", side_effect=[False, True]), \
+             patch("storelimitless.auth.Popen") as process:
+            StoreLimitless.initialize(server_ip="https://unavailable.example")
+        self.assertEqual(StoreLimitless.API_URL, "http://127.0.0.1:8000")
+        process.assert_not_called()
+
+    def test_initialize_can_require_remote_without_fallback(self) -> None:
+        from storelimitless import StoreLimitlessConnectionError
+
+        with patch.object(StoreLimitless, "_is_server_running", return_value=False):
+            with self.assertRaises(StoreLimitlessConnectionError):
+                StoreLimitless.initialize(
+                    server_ip="https://unavailable.example",
+                    fallback_to_local=False,
+                )
+
+    def test_readiness_requires_ready_json_true(self) -> None:
+        good = SimpleNamespace(ok=True, json=lambda: {"ready": True})
+        bad = SimpleNamespace(ok=True, json=lambda: {"ready": False})
+        with patch("storelimitless.auth.get", return_value=good):
+            self.assertTrue(StoreLimitless._is_server_running())
+        with patch("storelimitless.auth.get", return_value=bad):
+            self.assertFalse(StoreLimitless._is_server_running())
+
+
+class DirectoryImportTests(unittest.TestCase):
+    """Cover remote link-import request construction and synchronous URL upload."""
+
+    def setUp(self) -> None:
+        self.user = SimpleNamespace(username="demo", token="token", home=None)
+        self.directory = Directory(self.user, 1, Path("/home"), None, None)  # type: ignore[arg-type]
+        self.user.home = self.directory
+
+    def test_import_link_submits_magnet_indices_and_batch(self) -> None:
+        response = SimpleNamespace(json=lambda: {"job_id": "job-42"})
+        with patch("storelimitless.auth.StoreLimitless.request", return_value=response) as request:
+            job = self.directory.import_link(
+                "magnet:?xt=urn:btih:0123456789abcdef",
+                selected_files=[0, 4],
+                batch_id="batch-3",
+            )
+        self.assertEqual(job.job_id, "job-42")
+        self.assertEqual(job.status, "uploading")
+        self.assertEqual(request.call_args.kwargs["params"]["selected_files"], "[0, 4]")
+        self.assertEqual(request.call_args.kwargs["params"]["batch_id"], "batch-3")
+
+    def test_import_link_rejects_duplicate_torrent_indices(self) -> None:
+        with patch("storelimitless.auth.StoreLimitless.request") as request:
+            with self.assertRaises(ValueError):
+                self.directory.import_link(
+                    "magnet:?xt=urn:btih:hash",
+                    selected_files=[1, 1],
+                )
+            request.assert_not_called()
+
+    def test_import_link_rejects_torrent_indices_for_http_urls(self) -> None:
+        with patch("storelimitless.auth.StoreLimitless.request") as request:
+            with self.assertRaises(ValueError):
+                self.directory.import_link(
+                    "https://example.com/file.zip",
+                    selected_files=[0],
+                )
+            request.assert_not_called()
+
+    def test_upload_waits_for_http_import_and_returns_new_file(self) -> None:
+        old_file = SimpleNamespace(id=10, name="old.txt")
+        imported_file = SimpleNamespace(id=11, name="report.txt")
+        listings = [
+            SimpleNamespace(files=[old_file]),
+            SimpleNamespace(files=[old_file, imported_file]),
+        ]
+        job = SimpleNamespace(
+            job_id="job-http",
+            name="report.txt",
+            status="uploading",
+            message="Import queued",
+            refresh=lambda: setattr(job, "status", "completed") or job,
+        )
+        with patch.object(Directory, "ls", new_callable=PropertyMock, side_effect=listings), \
+             patch.object(self.directory, "import_link", return_value=job) as import_link:
+            result = self.directory.upload(
+                "https://example.com/report.txt",
+                quiet=True,
+                poll_interval=0,
+                job_timeout=1,
+            )
+        self.assertIs(result, imported_file)
+        import_link.assert_called_once()
+
+
+class FileSecurityAndSharingTests(unittest.TestCase):
+    """Ensure private file operations do not mint public links."""
+
+    def setUp(self) -> None:
+        user = SimpleNamespace(username="demo", token="test")
+        directory = SimpleNamespace(user=user, path=Path("/home"))
+        self.file = File(
+            directory=directory,  # type: ignore[arg-type]
+            id=7,
+            name="notes.txt",
+            type="text/plain",
+            size=5,
+            modified_at=datetime.now(timezone.utc),
+            deleted_at=None,
+            data_center="Discord",
+        )
+
+    def test_public_share_link_uses_opaque_share_id(self) -> None:
+        response = SimpleNamespace(json=lambda: {
+            "share_id": "opaque-share-id",
+            "public_token": "legacy-token",
+        })
+        with patch("storelimitless.file.StoreLimitless.request", return_value=response) as request:
+            url = self.file.public_share_link()
+        self.assertTrue(url.endswith("/public/stream/opaque-share-id"))
+        request.assert_called_once_with(self.file.user, "POST", "/auth/file/7/public-link")
+
+    def test_download_uses_session_bound_url(self) -> None:
+        class FakeResponse:
+            headers = {"Content-Length": "5"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def iter_content(self, chunk_size):
+                yield b"hello"
+
+        response = FakeResponse()
+        with patch.object(self.file, "private_download_link", return_value=("https://example.invalid/public/download/private", 60)), \
+             patch("storelimitless.file.StoreLimitless.request", return_value=response) as request, \
+             patch("storelimitless.file.tqdm") as progress:
+            with __import__("tempfile").TemporaryDirectory() as folder:
+                path = self.file.download(Path(folder) / "notes.txt", quiet=True)
+                self.assertEqual(path.read_bytes(), b"hello")
+        self.assertEqual(request.call_args.args[2], "/public/download/private")
+        progress.assert_called_once()
+
+
+class UserTaskManagementTests(unittest.TestCase):
+    """Verify account-level task tray operations."""
+
+    def setUp(self) -> None:
+        self.user = object.__new__(User)
+        self.user.token = "token"
+        self.user.username = "demo"
+        self.user.password = "secret"
+        self.user.first_name = "Test"
+        self.user.last_name = "User"
+        self.user.home = Directory(self.user, 1, Path("/home"), None, None)
+
+    def test_clear_upload_tasks_calls_clear_all_endpoint(self) -> None:
+        response = SimpleNamespace(json=lambda: {"message": "Upload tray cleared"})
+        with patch("storelimitless.auth.StoreLimitless.request", return_value=response) as request:
+            result = self.user.clear_upload_tasks()
+        self.assertEqual(result["message"], "Upload tray cleared")
+        request.assert_called_once_with(self.user, "DELETE", "/auth/upload-batches")
+
+    def test_clear_upload_batches_is_an_alias(self) -> None:
+        response = SimpleNamespace(json=lambda: {"message": "Upload tray cleared"})
+        with patch("storelimitless.auth.StoreLimitless.request", return_value=response) as request:
+            result = self.user.clear_upload_batches()
+        self.assertEqual(result["message"], "Upload tray cleared")
+        request.assert_called_once_with(self.user, "DELETE", "/auth/upload-batches")
+
+
+class TaskLifecycleTests(unittest.TestCase):
+    """Exercise task/job lifecycle request paths."""
+
+    def setUp(self) -> None:
+        self.user = SimpleNamespace(
+            username="demo",
+            token="test",
+            home=SimpleNamespace(path=Path("/home"), id=1),
+        )
+
+    def test_upload_task_update_and_cancel(self) -> None:
+        task = UploadTask(self.user, "batch-1", {"name": "Documents"})
+        update_response = SimpleNamespace(json=lambda: {"batch_id": "batch-1", "status": "uploading"})
+        cancel_response = SimpleNamespace(json=lambda: {"batch_id": "batch-1", "status": "cancelled"})
+        with patch("storelimitless.auth.StoreLimitless.request", side_effect=[update_response, cancel_response]) as request:
+            task.update(message="Starting")
+            task.cancel()
+        self.assertEqual(task.status, "cancelled")
+        self.assertEqual(request.call_args_list[0].args[1:3], ("PATCH", "/auth/upload-batches/batch-1"))
+        self.assertEqual(request.call_args_list[1].args[1:3], ("POST", "/auth/upload-batches/batch-1/cancel"))
+
+    def test_upload_job_refresh_cancel_and_failure_report(self) -> None:
+        job = UploadJob(self.user, "job-1")
+        replies = [
+            SimpleNamespace(json=lambda: {"job_id": "job-1", "status": "uploading"}),
+            SimpleNamespace(json=lambda: {"job_id": "job-1", "status": "cancelled"}),
+            SimpleNamespace(json=lambda: {"job_id": "job-1", "status": "error"}),
+        ]
+        with patch("storelimitless.auth.StoreLimitless.request", side_effect=replies) as request:
+            job.refresh()
+            job.cancel()
+            job.report_failure("chunk write failed")
+        self.assertEqual(job.status, "error")
+        self.assertEqual(request.call_args_list[0].args[1:3], ("GET", "/auth/upload-jobs/job-1/status"))
+        self.assertEqual(request.call_args_list[1].args[1:3], ("POST", "/auth/upload-jobs/job-1/cancel"))
+        self.assertEqual(request.call_args_list[2].kwargs["json"], {"message": "chunk write failed"})
+
 
 
 if __name__ == "__main__":

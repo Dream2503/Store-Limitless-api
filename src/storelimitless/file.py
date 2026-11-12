@@ -160,6 +160,31 @@ class File:
         route: str = "download" if download else "stream"
         return f"{StoreLimitless.API_URL}/public/{route}/{token}"
 
+    def public_share_id(self) -> str:
+        """Create or retrieve the opaque share ID used by modern public URLs."""
+        response = StoreLimitless.request(self.user, "POST", f"/auth/file/{self.id}/public-link")
+        try:
+            data: Any = response.json()
+            share_id: Any = data.get("share_id") if isinstance(data, dict) else None
+            if not isinstance(share_id, str) or not share_id:
+                raise TypeError("share_id must be a non-empty string")
+            return share_id
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError(
+                "StoreLimitless server returned an invalid public share response"
+            ) from error
+
+    def public_share_link(self, *, download: bool = False) -> str:
+        """Return a modern public URL using the opaque share ID.
+
+        Unlike the legacy token returned by ``public_link()``, share IDs are
+        the identifiers used by the app's compact ``/s/{share_id}`` sharing
+        experience and are accepted by the public stream/download routes.
+        """
+        share_id = self.public_share_id()
+        route = "download" if download else "stream"
+        return f"{StoreLimitless.API_URL}/public/{route}/{share_id}"
+
     def private_stream_link(self) -> tuple[str, int]:
         """Create a stream URL bound to the current login session.
 
@@ -229,23 +254,25 @@ class File:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned invalid file metadata") from error
 
-    def read_text(self, *, encoding: str = "utf-8", errors: str = "strict", max_bytes: int = 5_000_000) -> str:
-        """Read a supported text/source file using the server's signed download route.
+    def read_bytes(self, *, max_bytes: int = 64 * 1024 * 1024) -> bytes:
+        """Read file contents into memory with an explicit size ceiling.
 
-        The file is streamed into memory only up to ``max_bytes``. The server
-        remains responsible for determining which extensions are editable.
+        Use ``download()`` for large files. This helper is intended for
+        programmatic access to reasonably sized files and uses a private,
+        session-bound download URL rather than creating a public share.
         """
-        if max_bytes <= 0:
-            raise ValueError("max_bytes must be greater than zero")
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
 
         metadata = self.metadata()
         if metadata["size"] > max_bytes:
-            raise ValueError(f"File exceeds the configured {max_bytes}-byte text limit")
+            raise ValueError(f"File exceeds the configured {max_bytes}-byte read limit")
 
+        download_url, _expires_in = self.private_download_link()
         response = StoreLimitless.request(
             self.user,
             "GET",
-            self.public_link(download=True).removeprefix(StoreLimitless.API_URL),
+            download_url.removeprefix(StoreLimitless.API_URL),
             stream=True,
             timeout=(15, 120),
         )
@@ -256,12 +283,28 @@ class File:
                     continue
                 content.extend(chunk)
                 if len(content) > max_bytes:
-                    raise ValueError(f"File exceeds the configured {max_bytes}-byte text limit")
+                    raise ValueError(f"File exceeds the configured {max_bytes}-byte read limit")
+        return bytes(content)
 
+    def read_text(
+            self,
+            *,
+            encoding: str = "utf-8",
+            errors: str = "strict",
+            max_bytes: int = 5_000_000,
+    ) -> str:
+        """Read a supported text/source file using bounded-memory retrieval.
+
+        The server enforces the editable-extension allowlist on save. Reading
+        uses the same conservative default 5 MB limit to avoid loading large
+        media files into memory accidentally.
+        """
         try:
-            return bytes(content).decode(encoding, errors=errors)
+            return self.read_bytes(max_bytes=max_bytes).decode(encoding, errors=errors)
         except (LookupError, UnicodeDecodeError) as error:
-            raise StoreLimitlessResponseError("File content could not be decoded with the requested encoding") from error
+            raise StoreLimitlessResponseError(
+                "File content could not be decoded with the requested encoding"
+            ) from error
 
     def save_text(self, content: str, *, encoding: str = "utf-8", max_bytes: int = 5_000_000) -> File:
         """Replace this file's contents while preserving its remote file ID.
@@ -324,10 +367,11 @@ class File:
                 metadata.
         """
         output_path: Path = Path(path) if path is not None else Path(self.name)
+        download_url, _expires_in = self.private_download_link()
         response: Response = StoreLimitless.request(
             self.user,
             "GET",
-            self.public_link(download=True).removeprefix(StoreLimitless.API_URL),
+            download_url.removeprefix(StoreLimitless.API_URL),
             stream=True,
             timeout=(15, 120),
         )

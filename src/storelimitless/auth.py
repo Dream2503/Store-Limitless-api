@@ -67,13 +67,16 @@ class StoreLimitless:
 
     @classmethod
     def _is_server_running(cls) -> bool:
-        """Check the public readiness endpoint without launching a process."""
+        """Return true only when the configured server advertises readiness."""
 
         try:
             response: Response = get(f"{cls.API_URL}/public/ready", timeout=3)
-            return response.ok
+            if not response.ok:
+                return False
+            payload: Any = response.json()
+            return isinstance(payload, dict) and payload.get("ready") is True
 
-        except RequestException:
+        except (RequestException, ValueError, TypeError, AttributeError):
             return False
 
     @classmethod
@@ -123,18 +126,39 @@ class StoreLimitless:
         raise StoreLimitlessHTTPError(response.status_code, message or f"HTTP {response.status_code}")
 
     @classmethod
-    def initialize(cls, *, server_path: str | Path | None = None, server_ip: str = "http://127.0.0.1:8000") -> None:
-        """Configure the API URL and start the bundled server if necessary.
+    def initialize(
+            cls,
+            *,
+            server_path: str | Path | None = None,
+            server_ip: str = "http://127.0.0.1:8000",
+            fallback_to_local: bool = True,
+    ) -> None:
+        """Use a ready remote server or start the bundled local server as fallback.
 
-        ``server_path`` overrides the platform-specific bundled executable. If the configured URL already responds at ``/public/ready``, no local
-        process is started.
+        When a remote URL is unavailable and ``fallback_to_local`` is true,
+        the SDK switches to ``http://127.0.0.1:8000`` before reusing or
+        launching the packaged executable. Set it to false to require the
+        requested remote server and fail instead of silently switching hosts.
         """
         from platform import system
+        from urllib.parse import urlsplit
 
-        cls.API_URL = server_ip.rstrip("/")
+        requested_url = server_ip.rstrip("/")
+        cls.API_URL = requested_url
 
         if cls._is_server_running():
             return
+
+        host = (urlsplit(requested_url).hostname or "").lower()
+        is_loopback = host in {"127.0.0.1", "localhost", "::1"}
+        if not is_loopback:
+            if not fallback_to_local:
+                raise StoreLimitlessConnectionError(
+                    f"StoreLimitless server is not ready at {requested_url}"
+                )
+            cls.API_URL = "http://127.0.0.1:8000"
+            if cls._is_server_running():
+                return
 
         if server_path is None:
             match system():
@@ -199,7 +223,7 @@ class StoreLimitless:
         if cls._process is None and not cls._is_server_running():
             raise StoreLimitlessConnectionError("StoreLimitless server is not running. Call StoreLimitless.initialize() or start the server.")
 
-        response: Response = cls.request(None, "POST", "/auth/login", params={"username": username, "password": password})
+        response: Response = cls.request(None, "POST", "/auth/login", json={"username": username, "password": password})
 
         try:
             reply, user_data, home_data = response.json()
