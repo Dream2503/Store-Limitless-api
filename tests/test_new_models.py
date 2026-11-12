@@ -10,6 +10,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone
+from unittest.mock import patch
 from storelimitless import File, FileTree, TorrentPreview, UploadJob, UploadTask
 
 
@@ -111,14 +113,12 @@ class FileTextApiTests(unittest.TestCase):
             name="notes.txt",
             type="text/plain",
             size=11,
-            modified_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            modified_at=datetime.now(timezone.utc),
             deleted_at=None,
             data_center="Discord",
         )
 
     def test_read_text_decodes_streamed_bytes(self) -> None:
-        from unittest.mock import Mock, patch
-
         class FakeResponse:
             def __enter__(self):
                 return self
@@ -139,8 +139,6 @@ class FileTextApiTests(unittest.TestCase):
         self.assertEqual(fake.assert_chunk_size, 64 * 1024)
 
     def test_read_text_rejects_oversized_metadata_before_download(self) -> None:
-        from unittest.mock import patch
-
         with patch.object(self.file, "metadata", return_value={"id": 7, "name": "notes.txt", "type": "text/plain", "size": 100}), \
              patch("storelimitless.file.StoreLimitless.request") as request:
             with self.assertRaises(ValueError):
