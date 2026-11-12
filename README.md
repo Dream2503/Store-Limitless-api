@@ -806,6 +806,7 @@ Python methods above; request and response schemas remain the responsibility of 
 | `DELETE /auth/trash/directory/{did}`       | Permanently delete a trashed directory.                                        |
 | `GET /auth/tree` | Return the complete active and trashed file tree with the storage total. |
 | `GET /auth/file/{fid}/metadata` | Fetch fresh metadata for a specific file. |
+| `PUT /auth/file/{fid}/content` | Replace a supported text/source file (maximum 5 MB) while retaining its file ID. |
 | `POST /auth/file/{fid}/private-stream-link` | Create a stream link bound to the current login session. |
 | `POST /auth/file/{fid}/download-link` | Create a download link bound to the current login session. |
 | `POST /auth/logout` | Revoke links bound to the current login session. |
