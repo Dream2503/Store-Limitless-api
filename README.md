@@ -16,6 +16,7 @@ environments, which the SDK can launch when the configured local server is not a
 - Upload local files in chunks with a terminal progress bar.
 - Import a file from an HTTP (S) URL without first downloading it to the Python machine.
 - Download files to a local path with progress tracking.
+- Read and edit supported text/source-code files without changing their file IDs.
 - Create public stream/download links and launch media in VLC or another player.
 - Rename and move individual files or folders, or use a batch move for multiple items.
 - Move files and directories to trash, restore them, and permanently delete trashed items.
@@ -273,6 +274,9 @@ A `File` object represents a stored remote file and exposes metadata including `
 | `file.private_stream_link()`             | Return a session-bound streaming URL and server-reported expiry.                                   |
 | `file.private_download_link()`            | Return a session-bound attachment URL and server-reported expiry.                                  |
 | `file.metadata()`                         | Fetch the current server metadata for this file.                                                   |
+
+| `file.read_text(encoding="utf-8", max_bytes=5_000_000)` | Read a supported text/source file with a bounded-memory download. |
+| `file.save_text(content, encoding="utf-8", max_bytes=5_000_000)` | Replace a supported text/source file while preserving its remote file ID. |
 | `file.stream(application="vlc")`        | Open the public stream URL in the requested player executable and wait for the player to exit.      |
 | `file.rename(name)`                     | Rename the remote file and update this object's name.                                               |
 | `file.move(destination)`                | Move the file into an existing directory.                                                           |

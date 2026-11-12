@@ -229,6 +229,84 @@ class File:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned invalid file metadata") from error
 
+    def read_text(self, *, encoding: str = "utf-8", errors: str = "strict", max_bytes: int = 5_000_000) -> str:
+        """Read a supported text/source file using the server's signed download route.
+
+        The file is streamed into memory only up to ``max_bytes``. The server
+        remains responsible for determining which extensions are editable.
+        """
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be greater than zero")
+
+        metadata = self.metadata()
+        if metadata["size"] > max_bytes:
+            raise ValueError(f"File exceeds the configured {max_bytes}-byte text limit")
+
+        response = StoreLimitless.request(
+            self.user,
+            "GET",
+            self.public_link(download=True).removeprefix(StoreLimitless.API_URL),
+            stream=True,
+            timeout=(15, 120),
+        )
+        content = bytearray()
+        with response:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                content.extend(chunk)
+                if len(content) > max_bytes:
+                    raise ValueError(f"File exceeds the configured {max_bytes}-byte text limit")
+
+        try:
+            return bytes(content).decode(encoding, errors=errors)
+        except (LookupError, UnicodeDecodeError) as error:
+            raise StoreLimitlessResponseError("File content could not be decoded with the requested encoding") from error
+
+    def save_text(self, content: str, *, encoding: str = "utf-8", max_bytes: int = 5_000_000) -> File:
+        """Replace this file's contents while preserving its remote file ID.
+
+        The backend currently accepts text/source files up to 5 MB. A failed
+        save raises the server's normal HTTP exception and leaves this snapshot
+        unchanged.
+        """
+        if not isinstance(content, str):
+            raise TypeError("content must be a string")
+        if max_bytes <= 0 or max_bytes > 5_000_000:
+            raise ValueError("max_bytes must be between 1 and 5,000,000")
+
+        try:
+            payload = content.encode(encoding)
+        except (LookupError, UnicodeEncodeError) as error:
+            raise ValueError("content cannot be encoded with the requested encoding") from error
+        if len(payload) > max_bytes:
+            raise ValueError(f"Edited content exceeds the {max_bytes}-byte limit")
+
+        response = StoreLimitless.request(
+            self.user,
+            "PUT",
+            f"/auth/file/{self.id}/content",
+            data=payload,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=(15, 120),
+        )
+        try:
+            data: Any = response.json()
+            if not isinstance(data, dict) or data.get("id") != self.id:
+                raise TypeError("missing or invalid file identity")
+            size = data.get("size")
+            name = data.get("name")
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0 or not isinstance(name, str):
+                raise TypeError("missing or invalid saved file metadata")
+            self.name = name
+            self.size = size
+            modified_at = parse_datetime(data.get("modified_at"))
+            if modified_at is not None:
+                self.modified_at = modified_at
+            return self
+        except (ValueError, TypeError) as error:
+            raise StoreLimitlessResponseError("StoreLimitless server returned an invalid text-save response") from error
+
     def download(self, path: str | Path | None = None, *, quiet: bool = False) -> Path:
         """Download this file to a local path with bounded-memory streaming.
 
