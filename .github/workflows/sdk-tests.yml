@@ -42,6 +42,24 @@ jobs:
       - name: Run offline regression suite
         run: python -m unittest discover -s tests -p "test_*.py" -v
 
+  deployed-readiness:
+    name: Check deployed API readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the production readiness endpoint
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import urlopen
+
+          url = "https://cdn-storelimitless.vercel.app/public/ready"
+          with urlopen(url, timeout=20) as response:
+              payload = json.load(response)
+          if not isinstance(payload, dict) or payload.get("ready") is not True:
+              raise SystemExit(f"Production readiness check failed: {payload!r}")
+          print("Production API is ready:", payload)
+          PY
+
   package-build:
     name: Build and validate distribution
     runs-on: ubuntu-latest
