@@ -106,8 +106,7 @@ from storelimitless import StoreLimitless
 StoreLimitless.initialize()
 ```
 
-The default base URL is `http://127.0.0.1:8000`. The SDK checks `GET /public/ready`. If the server is healthy, it reuses
-it. Otherwise, it attempts to launch the bundled executable for the current operating system and waits for readiness.
+The default base URL is `https://cdn-storelimitless.vercel.app`. The SDK checks `GET /public/ready` on the CDN first. If the CDN is unavailable, it checks `http://127.0.0.1:8000`; if the local server is not responding, it starts the bundled executable for the current operating system and waits for readiness.
 
 ### Use an already-running local or remote server
 
