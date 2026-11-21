@@ -515,37 +515,33 @@ class Directory:
         started_at = monotonic()
         final_status: dict[str, Any] | None = None
 
-        try:
-            while True:
-                if job_timeout is not None and monotonic() - started_at > job_timeout:
-                    raise StoreLimitlessConnectionError(
-                        f"Upload job {job_id} timed out while waiting for completion"
-                    )
-
-                status_response = StoreLimitless.request(
-                    self.user, "GET", f"/public/upload/{job_id}/status", timeout=30
+        while True:
+            if job_timeout is not None and monotonic() - started_at > job_timeout:
+                raise StoreLimitlessConnectionError(
+                    f"Upload job {job_id} timed out while waiting for completion"
                 )
-                try:
-                    raw_status: Any = status_response.json()
-                    if not isinstance(raw_status, dict):
-                        raise TypeError("Expected an object")
-                    final_status = raw_status
-                    status_value = str(raw_status.get("status", "uploading")).lower()
-                except (ValueError, TypeError) as error:
-                    raise StoreLimitlessResponseError(
-                        "StoreLimitless server returned an invalid upload status"
-                    ) from error
 
-                if status_value == "completed":
-                    break
-                if status_value in {"error", "cancelled"}:
-                    raise StoreLimitlessResponseError(
-                        str(raw_status.get("message") or f"Upload job {job_id} {status_value}")
-                    )
-                sleep(poll_interval)
-        finally:
-            pass
+            status_response = StoreLimitless.request(
+                self.user, "GET", f"/public/upload/{job_id}/status", timeout=30
+            )
+            try:
+                raw_status: Any = status_response.json()
+                if not isinstance(raw_status, dict):
+                    raise TypeError("Expected an object")
+                final_status = raw_status
+                status_value = str(raw_status.get("status", "uploading")).lower()
+            except (ValueError, TypeError) as error:
+                raise StoreLimitlessResponseError(
+                    "StoreLimitless server returned an invalid upload status"
+                ) from error
 
+            if status_value == "completed":
+                break
+            if status_value in {"error", "cancelled"}:
+                raise StoreLimitlessResponseError(
+                    str(raw_status.get("message") or f"Upload job {job_id} {status_value}")
+                )
+            sleep(poll_interval)
         if final_status is None:
             raise StoreLimitlessResponseError("StoreLimitless server returned no upload status")
 
