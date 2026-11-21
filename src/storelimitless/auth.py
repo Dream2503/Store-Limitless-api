@@ -30,7 +30,7 @@ class StoreLimitless:
     Call :meth:`initialize` to configure the API URL and optionally launch the bundled local server, then use :meth:`register` and :meth:`login`.
     """
 
-    API_URL: str = "http://127.0.0.1:8000"
+    API_URL: str = "https://cdn-storelimitless.vercel.app"
     _process: Popen[str] | None = None
 
     def __new__(cls, *args: Any, **kwargs: Any) -> StoreLimitless:
@@ -130,15 +130,16 @@ class StoreLimitless:
             cls,
             *,
             server_path: str | Path | None = None,
-            server_ip: str = "http://127.0.0.1:8000",
+            server_ip: str = "https://cdn-storelimitless.vercel.app",
             fallback_to_local: bool = True,
     ) -> None:
-        """Use a ready remote server or start the bundled local server as fallback.
+        """Prefer the hosted CDN API, then reuse or launch the local server.
 
-        When a remote URL is unavailable and ``fallback_to_local`` is true,
-        the SDK switches to ``http://127.0.0.1:8000`` before reusing or
-        launching the packaged executable. Set it to false to require the
-        requested remote server and fail instead of silently switching hosts.
+        The CDN endpoint is checked first by default. If it is unavailable and
+        ``fallback_to_local`` is enabled, the SDK checks
+        ``http://127.0.0.1:8000`` and only launches the bundled executable if
+        that local server is also unavailable. Set ``fallback_to_local=False``
+        to require the requested endpoint without switching to local service.
         """
         from platform import system
         from urllib.parse import urlsplit
