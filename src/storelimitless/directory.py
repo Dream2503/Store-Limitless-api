@@ -457,7 +457,7 @@ class Directory:
         # its first status poll often found the server-side job already complete.
         transfer_bar = tqdm(
             total=total_bytes,
-            desc="Sending to backend",
+            desc="Uploading File:",
             unit="B",
             unit_scale=True,
             unit_divisor=1024,
@@ -510,10 +510,8 @@ class Directory:
         finally:
             transfer_bar.close()
 
-        # The backend may still be storing the received file in Discord or
-        # Telegram. Show that as a second phase only while it is still active;
-        # if it completed during transfer, avoid displaying a redundant 100% bar.
-        storage_bar: Any = None
+        # Continue waiting for the backend to finish storing the file.
+        # Transfer progress is shown by the single "Uploading File:" bar above.
         started_at = monotonic()
         final_status: dict[str, Any] | None = None
 
@@ -532,38 +530,7 @@ class Directory:
                     if not isinstance(raw_status, dict):
                         raise TypeError("Expected an object")
                     final_status = raw_status
-                    total = int(raw_status.get("total", 0) or 0)
-                    transfer = int(raw_status.get("transfer", 0) or 0)
                     status_value = str(raw_status.get("status", "uploading")).lower()
-
-                    if status_value not in {"completed", "error", "cancelled"}:
-                        if storage_bar is None:
-                            storage_bar = tqdm(
-                                total=max(0, total),
-                                desc="Storing in cloud",
-                                unit="B",
-                                unit_scale=True,
-                                unit_divisor=1024,
-                                disable=quiet,
-                                ascii=" ━",
-                                colour="green",
-                                ncols=get_terminal_size(fallback=(80, 24)).columns,
-                                bar_format="{desc} {bar} {n_fmt}/{total_fmt} {rate_fmt} ETA {remaining}",
-                                miniters=1,
-                                mininterval=0.1,
-                            )
-
-                        storage_bar.total = max(0, total)
-                        storage_bar.n = (
-                            min(max(0, transfer), storage_bar.total)
-                            if storage_bar.total
-                            else max(0, transfer)
-                        )
-                        storage_bar.set_description(
-                            str(raw_status.get("message") or "Storing in cloud"),
-                            refresh=False,
-                        )
-                        storage_bar.refresh()
                 except (ValueError, TypeError) as error:
                     raise StoreLimitlessResponseError(
                         "StoreLimitless server returned an invalid upload status"
@@ -577,8 +544,7 @@ class Directory:
                     )
                 sleep(poll_interval)
         finally:
-            if storage_bar is not None:
-                storage_bar.close()
+            pass
 
         if final_status is None:
             raise StoreLimitlessResponseError("StoreLimitless server returned no upload status")
