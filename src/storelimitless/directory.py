@@ -439,6 +439,7 @@ class Directory:
             headers={
                 "X-Data-Center": data_center,
                 "X-File-Name": local_path.name,
+                "X-File-Size": str(total_bytes),
                 "X-Directory": str(self.path),
             },
             timeout=60,
@@ -451,40 +452,12 @@ class Directory:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload response") from error
 
-        with local_path.open("rb") as stream:
-            offset = 0
-            while True:
-                chunk = stream.read(chunk_size)
-                if not chunk and not (total_bytes == 0 and offset == 0):
-                    break
-
-                for attempt in range(1, chunk_retries + 1):
-                    try:
-                        StoreLimitless.request(
-                            self.user,
-                            "PUT",
-                            f"/public/upload/{job_id}/chunk",
-                            params={"offset": offset, "total": total_bytes},
-                            headers={"Content-Type": "application/octet-stream"},
-                            data=chunk,
-                            timeout=120,
-                        )
-                        break
-                    except StoreLimitlessConnectionError:
-                        if attempt >= chunk_retries:
-                            raise
-                        sleep(min(float(attempt), 3.0))
-                    except StoreLimitlessHTTPError as error:
-                        if error.status_code < 500 or attempt >= chunk_retries:
-                            raise
-                        sleep(min(float(attempt), 3.0))
-
-                offset += len(chunk)
-                if not chunk:
-                    break
-
-        progress_bar = tqdm(
-            total=0,
+        # Show client-to-backend transfer progress while chunks are actually
+        # being sent. The previous progress bar was created after this loop, so
+        # its first status poll often found the server-side job already complete.
+        transfer_bar = tqdm(
+            total=total_bytes,
+            desc="Sending to backend",
             unit="B",
             unit_scale=True,
             unit_divisor=1024,
@@ -493,7 +466,54 @@ class Directory:
             colour="green",
             ncols=get_terminal_size(fallback=(80, 24)).columns,
             bar_format="{desc} {bar} {n_fmt}/{total_fmt} {rate_fmt} ETA {remaining}",
+            miniters=1,
+            mininterval=0.1,
         )
+
+        try:
+            with local_path.open("rb") as stream:
+                offset = 0
+                while True:
+                    chunk = stream.read(chunk_size)
+                    if not chunk and not (total_bytes == 0 and offset == 0):
+                        break
+
+                    for attempt in range(1, chunk_retries + 1):
+                        try:
+                            StoreLimitless.request(
+                                self.user,
+                                "PUT",
+                                f"/public/upload/{job_id}/chunk",
+                                params={"offset": offset, "total": total_bytes},
+                                headers={"Content-Type": "application/octet-stream"},
+                                data=chunk,
+                                timeout=120,
+                            )
+                            break
+                        except StoreLimitlessConnectionError:
+                            if attempt >= chunk_retries:
+                                raise
+                            sleep(min(float(attempt), 3.0))
+                        except StoreLimitlessHTTPError as error:
+                            if error.status_code < 500 or attempt >= chunk_retries:
+                                raise
+                            sleep(min(float(attempt), 3.0))
+
+                    # Count bytes only after the server has acknowledged the
+                    # complete chunk, so retries never inflate the progress.
+                    offset += len(chunk)
+                    if chunk:
+                        transfer_bar.update(len(chunk))
+
+                    if not chunk:
+                        break
+        finally:
+            transfer_bar.close()
+
+        # The backend may still be storing the received file in Discord or
+        # Telegram. Show that as a second phase only while it is still active;
+        # if it completed during transfer, avoid displaying a redundant 100% bar.
+        storage_bar: Any = None
         started_at = monotonic()
         final_status: dict[str, Any] | None = None
 
@@ -514,11 +534,36 @@ class Directory:
                     final_status = raw_status
                     total = int(raw_status.get("total", 0) or 0)
                     transfer = int(raw_status.get("transfer", 0) or 0)
-                    progress_bar.total = max(0, total)
-                    progress_bar.n = min(max(0, transfer), progress_bar.total) if progress_bar.total else max(0, transfer)
-                    progress_bar.set_description(str(raw_status.get("message") or "Uploading"), refresh=False)
-                    progress_bar.refresh()
                     status_value = str(raw_status.get("status", "uploading")).lower()
+
+                    if status_value not in {"completed", "error", "cancelled"}:
+                        if storage_bar is None:
+                            storage_bar = tqdm(
+                                total=max(0, total),
+                                desc="Storing in cloud",
+                                unit="B",
+                                unit_scale=True,
+                                unit_divisor=1024,
+                                disable=quiet,
+                                ascii=" ━",
+                                colour="green",
+                                ncols=get_terminal_size(fallback=(80, 24)).columns,
+                                bar_format="{desc} {bar} {n_fmt}/{total_fmt} {rate_fmt} ETA {remaining}",
+                                miniters=1,
+                                mininterval=0.1,
+                            )
+
+                        storage_bar.total = max(0, total)
+                        storage_bar.n = (
+                            min(max(0, transfer), storage_bar.total)
+                            if storage_bar.total
+                            else max(0, transfer)
+                        )
+                        storage_bar.set_description(
+                            str(raw_status.get("message") or "Storing in cloud"),
+                            refresh=False,
+                        )
+                        storage_bar.refresh()
                 except (ValueError, TypeError) as error:
                     raise StoreLimitlessResponseError(
                         "StoreLimitless server returned an invalid upload status"
@@ -532,7 +577,8 @@ class Directory:
                     )
                 sleep(poll_interval)
         finally:
-            progress_bar.close()
+            if storage_bar is not None:
+                storage_bar.close()
 
         if final_status is None:
             raise StoreLimitlessResponseError("StoreLimitless server returned no upload status")
