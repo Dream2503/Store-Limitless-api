@@ -98,7 +98,7 @@ finally:
 Call `StoreLimitless.initialize()` before registering or logging in. The `server_ip` argument is the **base URL** of the
 API, not a URL to a specific endpoint.
 
-### Use the default local server
+### Use the default cloud-connected server
 
 ```python
 from storelimitless import StoreLimitless
