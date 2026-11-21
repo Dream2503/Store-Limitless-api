@@ -126,6 +126,7 @@ class StoreLimitless:
 
         except (RequestException, ValueError, TypeError, AttributeError):
             return None
+
     @classmethod
     def request(cls, user: User | None, method: str, path: str, **kwargs: Any) -> Response:
         """Send an HTTP request and normalize connection and HTTP errors.
