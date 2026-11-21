@@ -32,6 +32,11 @@ def parse_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str):
         raise StoreLimitlessResponseError("StoreLimitless server returned an invalid timestamp")
 
+    # Python versions before 3.11 do not accept the ISO 8601 UTC designator
+    # ("Z") in fromisoformat(), so normalize it to an explicit UTC offset.
+    if value.endswith("Z"):
+        value = f"{value[:-1]}+00:00"
+
     try:
         return datetime.fromisoformat(value)
 
