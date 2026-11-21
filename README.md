@@ -106,7 +106,7 @@ from storelimitless import StoreLimitless
 StoreLimitless.initialize()
 ```
 
-The default base URL is `https://cdn-storelimitless.vercel.app`. The SDK checks `GET /public/ready` on the CDN first. If the CDN is unavailable, it checks `http://127.0.0.1:8000`; if the local server is not responding, it starts the bundled executable for the current operating system and waits for readiness.
+The default registry URL is `https://cdn-storelimitless.vercel.app`. During initialization, the SDK requests `/api/current-upstream` from that registry to discover the currently registered Cloudflare Quick Tunnel URL. It then checks `/public/ready` directly on the tunnel and uses that tunnel as `StoreLimitless.API_URL` for login, directory operations, metadata, and chunked file uploads. The Vercel URL is therefore used only for the small tunnel-discovery request during normal operation, rather than proxying every API request. If tunnel discovery or direct readiness fails, the SDK falls back to the stable Vercel proxy; when that is also unavailable, it checks `http://127.0.0.1:8000` and can start the bundled executable.
 
 ### Use an already-running local or remote server
 
