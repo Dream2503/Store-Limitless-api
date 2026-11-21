@@ -80,6 +80,53 @@ class StoreLimitless:
             return False
 
     @classmethod
+    def _discover_cloudflare_upstream(cls, registry_url: str) -> str | None:
+        """Resolve the currently registered Cloudflare Quick Tunnel URL.
+
+        The Vercel endpoint is used only as a small control-plane lookup. File
+        contents and subsequent API requests can then go directly to the
+        backend tunnel, avoiding the Vercel Function proxy for those requests.
+        """
+        from urllib.parse import urlsplit
+
+        try:
+            response: Response = get(
+                f"{registry_url.rstrip('/')}/api/current-upstream",
+                headers={
+                    "Accept": "application/json",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                },
+                timeout=10,
+            )
+            if not response.ok:
+                return None
+
+            payload: Any = response.json()
+            candidate: Any = payload.get("api_url") if isinstance(payload, dict) else None
+            if not isinstance(candidate, str) or not candidate.strip():
+                return None
+
+            tunnel = urlsplit(candidate.strip())
+            hostname = (tunnel.hostname or "").lower()
+
+            if (
+                tunnel.scheme.lower() != "https"
+                or not hostname.endswith(".trycloudflare.com")
+                or tunnel.username is not None
+                or tunnel.password is not None
+                or tunnel.port is not None
+                or tunnel.path not in {"", "/"}
+                or tunnel.query
+                or tunnel.fragment
+            ):
+                return None
+
+            return f"https://{hostname}"
+
+        except (RequestException, ValueError, TypeError, AttributeError):
+            return None
+    @classmethod
     def request(cls, user: User | None, method: str, path: str, **kwargs: Any) -> Response:
         """Send an HTTP request and normalize connection and HTTP errors.
 
@@ -133,19 +180,46 @@ class StoreLimitless:
             server_ip: str = "https://cdn-storelimitless.vercel.app",
             fallback_to_local: bool = True,
     ) -> None:
-        """Prefer the hosted CDN API, then reuse or launch the local server.
+        """Discover the active Cloudflare tunnel, then reuse or launch a server.
 
-        The CDN endpoint is checked first by default. If it is unavailable and
-        ``fallback_to_local`` is enabled, the SDK checks
-        ``http://127.0.0.1:8000`` and only launches the bundled executable if
-        that local server is also unavailable. Set ``fallback_to_local=False``
-        to require the requested endpoint without switching to local service.
+        When ``server_ip`` is the stable StoreLimitless Vercel registry URL,
+        the SDK queries ``/api/current-upstream``, verifies the returned
+        Cloudflare Quick Tunnel with ``/public/ready``, and sends subsequent
+        API requests directly to that tunnel. The stable proxy remains a
+        fallback if discovery or direct tunnel readiness fails.
+
+        If the hosted endpoint is unavailable and ``fallback_to_local`` is
+        enabled, the SDK checks ``http://127.0.0.1:8000`` and launches the
+        bundled executable only if that local server is also unavailable.
+        Set ``fallback_to_local=False`` to require the hosted endpoint.
         """
         from platform import system
         from urllib.parse import urlsplit
 
         requested_url = server_ip.rstrip("/")
-        cls.API_URL = requested_url
+        requested_parts = urlsplit(requested_url)
+        is_stable_registry = (
+            requested_parts.scheme.lower() == "https"
+            and (requested_parts.hostname or "").lower() == "cdn-storelimitless.vercel.app"
+            and requested_parts.path in {"", "/"}
+            and not requested_parts.query
+            and not requested_parts.fragment
+        )
+
+        # Resolve the live Quick Tunnel at startup. Its hostname changes after
+        # backend restarts, so never bake a trycloudflare.com URL into the SDK.
+        if is_stable_registry:
+            upstream_url = cls._discover_cloudflare_upstream(requested_url)
+            if upstream_url:
+                cls.API_URL = upstream_url
+                if cls._is_server_running():
+                    return
+
+            # Keep the stable proxy as a fallback when the tunnel is offline
+            # or the discovery registry has not yet been updated.
+            cls.API_URL = requested_url
+        else:
+            cls.API_URL = requested_url
 
         if cls._is_server_running():
             return
