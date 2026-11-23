@@ -221,7 +221,7 @@ Directory and search listings use :class:`DirectoryResult`, which separates obje
 File
 ----
 
-A ``File`` holds remote metadata such as its name, parent directory, size, media type, modification time, deletion time, and storage data center.
+A ``File`` holds remote metadata such as its name, parent directory, size, media type, modification time, deletion time, and storage references.
 
 * ``file.download(path=None, quiet=False)`` downloads the file to a local path, displays a progress bar unless ``quiet=True``, and returns the local
   ``Path``.

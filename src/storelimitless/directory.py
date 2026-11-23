@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from shutil import get_terminal_size
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Any, Iterator,, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 from requests import Response
 from tqdm import tqdm
