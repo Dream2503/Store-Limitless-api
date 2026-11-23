@@ -242,7 +242,7 @@ A `Directory` represents a **remote StoreLimitless directory**, not a directory 
 | `directory.mkdir(name)`                                | Create a child directory and return its refreshed object.                                     |
 | `directory.search(query, trash=False)`                 | Account-wide server-side search. It is not limited to the current subtree.                    |
 | `directory.find(query, trash=False)`                   | Compatibility alias for `search`.                                                             |
-| `directory.upload(source, data_center="Discord", ...)` | Upload a local path or import an HTTP(S) URL.                                                 |
+| `directory.upload(source, ...)` | Upload a local path or import an HTTP(S) URL.                                                 |
 | `directory.rename(name)`                               | Rename the directory; the server updates descendant paths.                                    |
 | `directory.move(destination)`                          | Move the directory into an existing destination directory.                                    |
 | `directory.rm()`                                       | Move the directory to the trash.                                                              |
@@ -275,7 +275,7 @@ first_file = listing.file
 ### `File`
 
 A `File` object represents a stored remote file and exposes metadata including `id`, `name`, `type`, `size`,
-`modified_at`, `deleted_at`, `data_center`, and its parent `directory`.
+`modified_at`, `deleted_at`, `and its parent `directory`.
 
 | Method                                  | Description                                                                                         |
 |-----------------------------------------|-----------------------------------------------------------------------------------------------------|
@@ -325,7 +325,7 @@ such as `./projects/reports` on your computer.
 ## Uploading files and importing URLs
 
 `Directory.upload()` accepts either a local file path or an HTTP (S) URL. The destination is the `Directory` object on
-which you call the method.
+which you call the method. Storage is selected automatically by the server.
 
 ### Upload a local file
 
@@ -339,18 +339,6 @@ print(uploaded.name)
 print(uploaded.size, "bytes")
 ```
 
-### Choose the storage data center
-
-The current SDK accepts `"Discord"` and `"Telegram"` for `data_center`:
-
-```python
-uploaded = uploads.upload(
-    "./video.mkv",
-    data_center="Telegram",
-    quiet=False,
-)
-```
-
 ### Import from a URL
 
 Pass a URL as a string. The server handles the import, so the file does not need to be downloaded into the Python
@@ -359,7 +347,6 @@ process's local working directory first.
 ```python
 imported = uploads.upload(
     "https://example.com/files/archive.zip",
-    data_center="Discord",
 )
 print(imported.name, imported.size)
 ```
@@ -368,9 +355,8 @@ The URL must be reachable by the server and supported by the server's link-impor
 job-creation request is not by itself proof that the file has finished importing: the SDK waits for the job status and
 then looks up the completed file in the destination listing.
 
-The SDK's high-level `Directory.upload()` currently accepts local paths and HTTP(S) URLs. The server also exposes
-remote-ingestion routes for supported YouTube, magnet-torrent, and Telegram message links, but those workflows are
-not all implemented as dedicated convenience methods on this Python client. Use `User.preview_torrent()` to inspect
+The SDK's high-level `Directory.upload()` currently accepts local paths and HTTP(S) URLs. The server also exposes remote-ingestion routes for supported YouTube and magnet-torrent imports. Use
+`User.preview_torrent()` to inspect a magnet before importing it, or `StoreLimitless.request()` for server endpoints not yet wrapped by a higher-level method. Use `User.preview_torrent()` to inspect
 a magnet before importing it, or `StoreLimitless.request()` for server endpoints not yet wrapped by a higher-level method.
 
 ### Upload tuning options
@@ -390,8 +376,7 @@ uploaded = uploads.upload(
 | Argument        | Default            | Description                                                                                     |
 |-----------------|--------------------|-------------------------------------------------------------------------------------------------|
 | `source`        | Required           | Local `str`/`Path`, or an HTTP(S) URL supplied as a string.                                     |
-| `data_center`   | `"Discord"`        | Storage destination: `"Discord"` or `"Telegram"`.                                               |
-| `quiet`         | `False`            | Set to `True` to disable the terminal progress bar.                                             |
+| | `quiet`         | `False`            | Set to `True` to disable the terminal progress bar.                                             |
 | `chunk_size`    | `10 * 1024 * 1024` | Local upload chunk size, in bytes. Must be positive.                                            |
 | `chunk_retries` | `3`                | Number of attempts for a chunk after retryable connection or server errors. Must be at least 1. |
 | `poll_interval` | `0.2`              | Seconds to wait between server-side job status checks. Must be non-negative.                    |
@@ -585,7 +570,6 @@ task: UploadTask = user.create_upload_task(
     "Reports",
     [{"name": "report.pdf", "size": 12345}],
     directory=user.home,
-    data_center="Discord",
     kind="file",
 )
 print("Created task:", task.batch_id)

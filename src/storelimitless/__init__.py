@@ -48,7 +48,7 @@ The SDK is intended to be used through these exported objects. In most cases, th
 
     # Create a folder, upload a local file, then search for it.
     projects: Directory = home.mkdir("projects")
-    uploaded: File = projects.upload("./report.pdf", data_center="Discord")
+    uploaded: File = projects.upload("./report.pdf")
     print("Uploaded:", uploaded)
     matches: DirectoryResult = user.search("report")
 
@@ -165,8 +165,8 @@ object or path string used in navigation and move operations identifies a remote
 * ``directory.mkdir(name)`` creates a child directory.
 * ``directory.search(query, trash=False)`` performs account-wide server-side search. ``directory.find(query, trash=False)`` is a compatibility alias
   for that search; it is not limited to the current subtree.
-* ``directory.import_link(link, ...)`` starts an asynchronous HTTP(S), Google Drive, YouTube, Telegram-message, or torrent import and returns an ``UploadJob``.
-* ``directory.upload(source, data_center="Discord", ...)`` uploads a local file or imports an HTTP(S) URL.
+* ``directory.import_link(link, ...)`` starts an asynchronous HTTP(S), Google Drive, YouTube, or torrent import and returns an ``UploadJob``.
+* ``directory.upload(source, ...)`` uploads a local file or imports an HTTP(S) URL.
 * ``directory.rename(name)`` renames the directory. The server also updates descendant paths.
 * ``directory.move(destination)`` moves the directory into an existing destination. Moving a directory into itself or a descendant is rejected by the
   server.
@@ -263,8 +263,8 @@ The SDK's directory navigation accepts one child name at a time; use multiple ``
 Uploading local files and importing URLs
 ========================================
 
-Call ``Directory.upload`` on the remote destination directory. It accepts a local filesystem path or an HTTP(S) URL. The storage destination is
-selected with ``data_center``; the current SDK supports ``"Discord"`` and ``"Telegram"``.
+Call ``Directory.upload`` on the remote destination directory. It accepts a local filesystem path or an HTTP(S) URL. Storage is automatic and is
+configured by the StoreLimitless server.
 
 .. code-block:: python
     from pathlib import Path
@@ -276,11 +276,8 @@ selected with ``data_center``; the current SDK supports ``"Discord"`` and ``"Tel
     uploaded: File = destination.upload(Path("./archive.zip"))
     print(uploaded.name, uploaded.size)
 
-    # Select a storage provider explicitly.
-    uploaded_video: File = destination.upload("./video.mkv", data_center="Telegram", quiet=False)
-
     # Import a remote URL without first saving it in the local working folder.
-    imported: File = destination.upload("https://example.com/releases/archive.zip", data_center="Discord")
+    imported: File = destination.upload("https://example.com/releases/archive.zip")
 
 For SDK versions that expose upload tuning options, the following options control chunk transmission and job polling:
 
@@ -289,7 +286,6 @@ For SDK versions that expose upload tuning options, the following options contro
 
     uploaded: File = destination.upload(
         "./large-video.mkv",
-        data_center="Telegram",
         chunk_size=10 * 1024 * 1024,  # 10 MiB per chunk
         chunk_retries=3,
         poll_interval=0.2,
