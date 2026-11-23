@@ -45,7 +45,6 @@ class File:
         size: int,
         modified_at: datetime,
         deleted_at: datetime | None,
-        data_center: str,
     ) -> None:
         """Initialize a File snapshot using already parsed metadata.
 
@@ -60,7 +59,6 @@ class File:
         self.size: int = size
         self.modified_at: datetime = modified_at
         self.deleted_at: datetime | None = deleted_at
-        self.data_center: str = data_center
 
     @classmethod
     def from_payload(cls, directory: Directory, payload: dict[str, Any]) -> File:
@@ -69,7 +67,7 @@ class File:
         Args:
             directory: Parent Directory object used to retain the account context.
             payload: JSON-compatible server record. Required values are id,
-                name, type, size, modified_at, and data_center; deleted_at may
+                name, type, size, and modified_at; deleted_at may
                 be absent or null.
 
         Raises:
@@ -81,7 +79,6 @@ class File:
             name: Any = payload["name"]
             file_type: Any = payload["type"]
             size: Any = payload["size"]
-            data_center: Any = payload["data_center"]
             modified_at = parse_datetime(payload.get("modified_at"))
             deleted_at = parse_datetime(payload.get("deleted_at"))
 
@@ -89,12 +86,12 @@ class File:
                 raise TypeError("id must be an integer")
             if isinstance(size, bool) or not isinstance(size, int) or size < 0:
                 raise TypeError("size must be a non-negative integer")
-            if not isinstance(name, str) or not isinstance(file_type, str) or not isinstance(data_center, str):
+            if not isinstance(name, str) or not isinstance(file_type, str):
                 raise TypeError("invalid string field")
             if modified_at is None:
                 raise TypeError("modified_at is missing")
 
-            return cls(directory, file_id, name, file_type, size, modified_at, deleted_at, data_center)
+            return cls(directory, file_id, name, file_type, size, modified_at, deleted_at)
 
         except (KeyError, TypeError) as error:
             if isinstance(error, StoreLimitlessResponseError):
@@ -106,7 +103,7 @@ class File:
         return (
             f"File(directory={self.directory!r}, id={self.id}, name={self.name!r}, "
             f"type={self.type!r}, size={self.size}, modified_at={self.modified_at!r}, "
-            f"deleted_at={self.deleted_at!r}, data_center={self.data_center!r})"
+            f"deleted_at={self.deleted_at!r})"
         )
 
     def __str__(self) -> str:
@@ -123,7 +120,6 @@ class File:
             f"Path: {self.directory.path}\n"
             f"Size: {size:.2f} {unit}\n"
             f"Modified: {self.modified_at}\n"
-            f"Data Center: {self.data_center}\n"
         )
 
     @property

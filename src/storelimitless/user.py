@@ -280,7 +280,7 @@ class User:
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload-task list") from error
 
-    def create_upload_task(self, name: str, items: list[str | dict[str, Any]], *, directory: Directory | str | Path | None = None, data_center: str = "Discord", kind: str = "file") -> UploadTask:
+    def create_upload_task(self, name: str, items: list[str | dict[str, Any]], *, directory: Directory | str | Path | None = None, kind: str = "file") -> UploadTask:
         """Register a durable task record for the shared Task tray.
 
         Creating a task records queue metadata; it does not transfer file bytes
@@ -294,7 +294,6 @@ class User:
             items: Strings or dictionaries describing queued files. Dictionary
                 items commonly have a name and optional size in bytes.
             directory: Existing remote Directory or remote path; defaults to home.
-            data_center: Server-supported provider, commonly Discord or Telegram.
             kind: file for a file queue or link for one remote import.
 
         Returns:
@@ -315,13 +314,13 @@ class User:
         else:
             directory_path = str(directory if directory is not None else self.home.path)
 
-        response = StoreLimitless.request(self, "POST", "/auth/upload-batches", json={"name": name, "kind": kind, "directory": directory_path, "data_center": data_center, "items": items})
+        response = StoreLimitless.request(self, "POST", "/auth/upload-batches", json={"name": name, "kind": kind, "directory": directory_path, "items": items})
         try:
             payload: Any = response.json()
             batch_id: Any = payload.get("batch_id") if isinstance(payload, dict) else None
             if not isinstance(batch_id, str) or not batch_id:
                 raise TypeError("batch_id must be a non-empty string")
-            seed = {**payload, "name": name, "kind": kind, "directory": directory_path, "data_center": data_center, "items": items}
+            seed = {**payload, "name": name, "kind": kind, "directory": directory_path, "items": items}
             return UploadTask(self, batch_id, seed)
         except (ValueError, TypeError) as error:
             raise StoreLimitlessResponseError("StoreLimitless server returned an invalid upload-task creation response") from error

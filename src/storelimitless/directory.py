@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from shutil import get_terminal_size
 from time import monotonic, sleep
-from typing import TYPE_CHECKING, Any, Iterator, Literal, cast
+from typing import TYPE_CHECKING, Any, Iterator,, cast
 
 from requests import Response
 from tqdm import tqdm
@@ -291,12 +291,11 @@ class Directory:
     def import_link(
             self,
             link: str,
-            data_center: Literal["Discord", "Telegram"] = "Discord",
             *,
             batch_id: str | None = None,
             selected_files: list[int] | None = None,
     ) -> UploadJob:
-        """Start an asynchronous HTTP(S), YouTube, Telegram, or torrent import.
+        """Start an asynchronous HTTP(S), YouTube, or torrent import.
 
         The server performs the ingestion in the background. Refresh the
         returned UploadJob to observe progress. For a torrent magnet, pass
@@ -331,7 +330,6 @@ class Directory:
 
         params = {
             "link": raw_link,
-            "data_center": data_center,
             "directory": str(self.path),
             "batch_id": batch_id or "",
             "selected_files": dumps(selected_files) if selected_files is not None else "",
@@ -363,7 +361,6 @@ class Directory:
     def upload(
             self,
             source: str | Path,
-            data_center: Literal["Discord", "Telegram"] = "Discord",
             *,
             quiet: bool = False,
             chunk_size: int = 10 * 1024 * 1024,
@@ -395,7 +392,7 @@ class Directory:
 
         if is_link:
             existing_ids = {file.id for file in self.ls.files}
-            job = self.import_link(source, data_center=data_center)
+            job = self.import_link(source)
             started_at = monotonic()
 
             while True:
@@ -437,7 +434,6 @@ class Directory:
             "POST",
             "/auth/upload",
             headers={
-                "X-Data-Center": data_center,
                 "X-File-Name": local_path.name,
                 "X-File-Size": str(total_bytes),
                 "X-Directory": str(self.path),

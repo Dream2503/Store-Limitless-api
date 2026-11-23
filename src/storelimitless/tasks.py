@@ -23,7 +23,7 @@ class UploadTask:
 
     A task groups the user-visible work shown in the StoreLimitless Task tray.
     Its items commonly describe local files or a single remote import such as
-    an HTTP URL, YouTube link, Telegram message link, or magnet torrent. The
+    an HTTP URL, YouTube link, or magnet torrent. The
     actual transfer and Redis-backed state are managed by the server.
 
     Args:
@@ -60,7 +60,6 @@ class UploadTask:
         self.status: str = str(self.data.get("status") or "queued")
         self.message: str = str(self.data.get("message") or "")
         self.directory: str = str(self.data.get("directory") or self.user.home.path)
-        self.data_center: str = str(self.data.get("data_center") or "Discord")
         raw_items: Any = self.data.get("items", [])
         self.items: list[dict[str, Any]] = [dict(item) for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
         raw_torrent_files: Any = self.data.get("torrent_files", [])
